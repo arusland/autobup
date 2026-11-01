@@ -10,6 +10,7 @@
 #   run              (default) pre-hook -> backup -> post-hook -> forget/prune -> check
 #   dry-run          show what would be backed up / forgotten, change nothing
 #   init             initialise the repository
+#   notify-test      send a test message to the configured Telegram chat
 #   restic <args>    run any restic command with this app's settings, e.g.
 #                      autobup.sh restic snapshots
 #                      autobup.sh restic restore latest --target /tmp/restore
@@ -79,6 +80,13 @@ NICE_LEVEL="10"
 IONICE_CLASS="2"                 # 2 = best-effort, 3 = idle
 HEALTHCHECK_URL=""               # e.g. https://hc-ping.com/<uuid> (start/success/fail)
 
+# ---- telegram notifications (both empty = disabled) -----------------------
+# Create a bot with @BotFather to get the token. Chat id: send the bot a
+# message, then open https://api.telegram.org/bot<TOKEN>/getUpdates.
+TELEGRAM_BOT_TOKEN=""            # e.g. 123456789:AAE...
+TELEGRAM_CHAT_ID=""              # e.g. 123456789 or -1001234567890 (group)
+TELEGRAM_NOTIFY_SUCCESS="yes"    # "no" = only report failures and warnings
+
 # ---- hooks ----------------------------------------------------------------
 # Run in a subshell with `set -eo pipefail`: any failing command fails the hook.
 # pre_backup  - failure aborts the run (backup is not made).
@@ -119,13 +127,15 @@ PROJECT_TAG="project:${PROJECT_NAME}"
 BACKUP_PARTIAL=0
 PRE_HOOK_STARTED=0
 POST_HOOK_DONE=0
+RUN_MODE=""        # "run" / "dry-run" once a backup run has started
+LAST_ERROR=""
 
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 log()  { printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$PROJECT_NAME" "$*"; }
 warn() { log "WARNING: $*" >&2; }
-die()  { log "ERROR: $1" >&2; exit "${2:-1}"; }
+die()  { LAST_ERROR="$1"; log "ERROR: $1" >&2; exit "${2:-1}"; }
 
 usage() { sed -n '3,21p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -137,6 +147,38 @@ ping_hc() {
     [[ -n "$HEALTHCHECK_URL" ]] || return 0
     curl -fsS -m 10 --retry 3 -o /dev/null "${HEALTHCHECK_URL%/}$1" \
         || warn "healthcheck ping '${1:-success}' failed"
+}
+
+# Send a plain-text message to Telegram if TELEGRAM_BOT_TOKEN/CHAT_ID are set.
+# The token is passed via a curl config on stdin so it does not show up in `ps`.
+notify_telegram() {
+    [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]] || return 0
+    command -v curl >/dev/null || { warn "curl not found, cannot send Telegram notification"; return 1; }
+    local text="$1"
+    (( ${#text} > 4000 )) && text="${text:0:4000}..."
+    printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TELEGRAM_BOT_TOKEN" \
+        | curl -fsS -m 15 --retry 3 -o /dev/null -K - \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${text}" \
+            --data-urlencode "disable_web_page_preview=true" \
+        || { warn "Telegram notification failed"; return 1; }
+}
+
+# Build and send the end-of-run Telegram message. $1 = final exit code.
+notify_result() {
+    local rc="$1" icon status
+    case $rc in
+        0) is_true "$TELEGRAM_NOTIFY_SUCCESS" || return 0
+           icon="✅"; status="backup succeeded" ;;
+        3) icon="⚠️"; status="backup finished, but some files could not be read" ;;
+        *) icon="❌"; status="backup FAILED (exit code $rc)" ;;
+    esac
+    local msg="${icon} [${PROJECT_NAME}] ${status}
+Host: $(hostname 2>/dev/null || echo unknown)
+Duration: ${SECONDS}s"
+    (( rc != 0 && rc != 3 )) && [[ -n "$LAST_ERROR" ]] && msg+=$'\n'"Error: ${LAST_ERROR}"
+    (( rc != 0 )) && msg+=$'\n'"Log: ${LOG_DIR}/${PROJECT_NAME}.log"
+    notify_telegram "$msg" || true
 }
 
 # Run a hook function if defined. Returns the hook's exit code.
@@ -151,7 +193,10 @@ run_hook() {
     ( set -eo pipefail; "$name" "$@" )
     rc=$?
     set -e
-    (( rc == 0 )) || log "ERROR: hook $name failed with exit code $rc" >&2
+    if (( rc != 0 )); then
+        LAST_ERROR="hook $name failed with exit code $rc"
+        log "ERROR: $LAST_ERROR" >&2
+    fi
     return "$rc"
 }
 
@@ -203,8 +248,7 @@ ensure_restic() {
     local file="restic_${ver}_${os}_${arch}.bz2"
     log "restic not found, downloading restic ${ver} (${os}/${arch}) to $dir"
 
-    RESTIC_TMP="$(mktemp -d)" || die "cannot create temp dir"
-    trap 'rm -rf -- "$RESTIC_TMP"' EXIT
+    RESTIC_TMP="$(mktemp -d)" || die "cannot create temp dir"   # removed by on_exit on failure
     curl -fsSL -m 300 --retry 3 -o "$RESTIC_TMP/$file" "$base/$file" \
         || die "download failed: $base/$file"
     curl -fsSL -m 30 --retry 3 -o "$RESTIC_TMP/SHA256SUMS" "$base/SHA256SUMS" \
@@ -220,7 +264,6 @@ ensure_restic() {
     install -m 755 "$RESTIC_TMP/restic" "$dir/.restic.new.$$" || die "cannot write to $dir" 2
     mv -f "$dir/.restic.new.$$" "$dir/restic" || die "cannot install restic to $dir" 2
     rm -rf -- "$RESTIC_TMP"; RESTIC_TMP=""
-    trap - EXIT
     hash -r
     log "installed $("$dir/restic" version)"
 }
@@ -233,7 +276,11 @@ validate() {
         || die "RESTIC_PASSWORD_FILE / RESTIC_PASSWORD / RESTIC_PASSWORD_COMMAND is not set" 2
     [[ -z "${RESTIC_PASSWORD_FILE:-}" || -r "$RESTIC_PASSWORD_FILE" ]] \
         || die "password file not readable: $RESTIC_PASSWORD_FILE" 2
-    if [[ -n "${RESTIC_PASSWORD:-}${AWS_SECRET_ACCESS_KEY:-}${B2_ACCOUNT_KEY:-}" ]] \
+    if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -z "${TELEGRAM_CHAT_ID:-}" ]] \
+       || [[ -z "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+        warn "Telegram notifications need both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"
+    fi
+    if [[ -n "${RESTIC_PASSWORD:-}${AWS_SECRET_ACCESS_KEY:-}${B2_ACCOUNT_KEY:-}${TELEGRAM_BOT_TOKEN:-}" ]] \
        && (( (8#$(stat -c '%a' "$SCRIPT_PATH") & 8#044) != 0 )); then
         warn "script contains secrets but is readable by others: chmod 700 $SCRIPT_PATH"
     fi
@@ -337,6 +384,8 @@ on_exit() {
     local rc=$?
     trap - EXIT
     set +e
+    [[ -n "$RESTIC_TMP" ]] && rm -rf -- "$RESTIC_TMP"
+    [[ -n "$RUN_MODE" ]] || exit "$rc"     # not a backup run (init, help, ...)
     if (( PRE_HOOK_STARTED == 1 && POST_HOOK_DONE == 0 )); then
         POST_HOOK_DONE=1
         run_hook post_backup "$rc"
@@ -350,6 +399,7 @@ on_exit() {
         run_hook on_failure "$rc"
         ping_hc "/fail"
     fi
+    [[ "$RUN_MODE" == "run" ]] && notify_result "$rc"
     exit "$rc"
 }
 
@@ -359,7 +409,6 @@ cmd_run() {
     setup_logging
     log "===== starting ${dry:+dry-run }backup"
     [[ -z "$dry" ]] && ping_hc "/start"
-    trap on_exit EXIT
 
     ensure_repo
 
@@ -380,7 +429,16 @@ main() {
     local cmd="${1:-run}"; [[ $# -gt 0 ]] && shift
     case "$cmd" in
         -h|--help|help) usage ;;
+        run|dry-run)    RUN_MODE="$cmd" ;;   # failures from here on are reported
+        notify-test)
+            [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]] \
+                || die "set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID first" 2
+            notify_telegram "🔔 [${PROJECT_NAME}] autobup test notification from $(hostname)" \
+                || die "could not send Telegram message"
+            log "Telegram test message sent"
+            exit 0 ;;
     esac
+    trap on_exit EXIT
     validate
     case "$cmd" in
         run)      cmd_run ;;
