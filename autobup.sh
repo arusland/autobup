@@ -37,6 +37,10 @@ RESTIC_REPOSITORY="/mnt/backup/restic"
 RESTIC_PASSWORD_FILE="/etc/autobup/myapp.pass"   # chmod 600
 AUTO_INIT="yes"                                  # create the repo on first run
 
+# ---- restic binary ------------------------------------------------------
+AUTO_INSTALL_RESTIC="yes"        # download latest restic release if not found
+RESTIC_INSTALL_DIR=""            # empty = /usr/local/bin (root) or ~/.local/bin
+
 # ---- what to back up ------------------------------------------------------
 BACKUP_PATHS=(
     "/srv/myapp/uploads"
@@ -158,8 +162,71 @@ restic_cmd() {
     "${cmd[@]}" restic "$@"
 }
 
+# Make sure restic is available; download the latest release if it is not.
+RESTIC_TMP=""
+ensure_restic() {
+    local dir="${RESTIC_INSTALL_DIR:-}"
+    if [[ -z "$dir" ]]; then
+        if (( EUID == 0 )); then dir="/usr/local/bin"; else dir="$HOME/.local/bin"; fi
+    fi
+    export PATH="$dir:$PATH"
+    command -v restic >/dev/null && return 0
+
+    is_true "$AUTO_INSTALL_RESTIC" || die "restic not found in PATH (AUTO_INSTALL_RESTIC=no)" 2
+    local tool
+    for tool in curl bunzip2 sha256sum; do
+        command -v "$tool" >/dev/null || die "restic not found and '$tool' is needed to download it" 2
+    done
+
+    local os arch
+    os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    case "$(uname -m)" in
+        x86_64|amd64)   arch="amd64" ;;
+        aarch64|arm64)  arch="arm64" ;;
+        armv6*|armv7*)  arch="arm" ;;
+        i?86)           arch="386" ;;
+        ppc64le)        arch="ppc64le" ;;
+        riscv64)        arch="riscv64" ;;
+        s390x)          arch="s390x" ;;
+        *) die "restic not found; no prebuilt binary for architecture $(uname -m)" 2 ;;
+    esac
+
+    # releases/latest redirects to .../releases/tag/vX.Y.Z (no API rate limit)
+    local url tag ver
+    url="$(curl -fsSL -m 30 -o /dev/null -w '%{url_effective}' \
+        https://github.com/restic/restic/releases/latest)" \
+        || die "cannot query latest restic release"
+    tag="${url##*/}"; ver="${tag#v}"
+    [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "cannot parse latest restic version from '$url'"
+
+    local base="https://github.com/restic/restic/releases/download/${tag}"
+    local file="restic_${ver}_${os}_${arch}.bz2"
+    log "restic not found, downloading restic ${ver} (${os}/${arch}) to $dir"
+
+    RESTIC_TMP="$(mktemp -d)" || die "cannot create temp dir"
+    trap 'rm -rf -- "$RESTIC_TMP"' EXIT
+    curl -fsSL -m 300 --retry 3 -o "$RESTIC_TMP/$file" "$base/$file" \
+        || die "download failed: $base/$file"
+    curl -fsSL -m 30 --retry 3 -o "$RESTIC_TMP/SHA256SUMS" "$base/SHA256SUMS" \
+        || die "download failed: $base/SHA256SUMS"
+    grep -E "^[0-9a-f]{64}  ${file//./\\.}\$" "$RESTIC_TMP/SHA256SUMS" > "$RESTIC_TMP/sum" \
+        || die "no checksum for $file in SHA256SUMS"
+    ( cd "$RESTIC_TMP" && sha256sum -c --quiet sum ) || die "checksum mismatch for $file"
+    bunzip2 -c "$RESTIC_TMP/$file" > "$RESTIC_TMP/restic" || die "cannot decompress $file"
+    chmod 755 "$RESTIC_TMP/restic"
+    "$RESTIC_TMP/restic" version >/dev/null || die "downloaded restic binary does not run"
+
+    mkdir -p "$dir" || die "cannot create $dir" 2
+    install -m 755 "$RESTIC_TMP/restic" "$dir/.restic.new.$$" || die "cannot write to $dir" 2
+    mv -f "$dir/.restic.new.$$" "$dir/restic" || die "cannot install restic to $dir" 2
+    rm -rf -- "$RESTIC_TMP"; RESTIC_TMP=""
+    trap - EXIT
+    hash -r
+    log "installed $("$dir/restic" version)"
+}
+
 validate() {
-    command -v restic >/dev/null || die "restic not found in PATH" 2
+    ensure_restic
     [[ -n "${RESTIC_REPOSITORY:-}${RESTIC_REPOSITORY_FILE:-}" ]] \
         || die "RESTIC_REPOSITORY (or RESTIC_REPOSITORY_FILE) is not set" 2
     [[ -n "${RESTIC_PASSWORD:-}${RESTIC_PASSWORD_FILE:-}${RESTIC_PASSWORD_COMMAND:-}" ]] \
