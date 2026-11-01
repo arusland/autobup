@@ -86,6 +86,8 @@ HEALTHCHECK_URL=""               # e.g. https://hc-ping.com/<uuid> (start/succes
 TELEGRAM_BOT_TOKEN=""            # e.g. 123456789:AAE...
 TELEGRAM_CHAT_ID=""              # e.g. 123456789 or -1001234567890 (group)
 TELEGRAM_NOTIFY_SUCCESS="yes"    # "no" = only report failures and warnings
+# For sftp: repositories the message also shows free space on the target
+# (via the sftp `df` command, needs key-based auth like restic itself).
 
 # ---- hooks ----------------------------------------------------------------
 # Run in a subshell with `set -eo pipefail`: any failing command fails the hook.
@@ -164,9 +166,44 @@ notify_telegram() {
         || { warn "Telegram notification failed"; return 1; }
 }
 
+# For an sftp: repository print the free space of the target folder, e.g.
+# "1.2TB free of 5.0TB (76% used)". Uses the sftp `df` command (statvfs
+# extension of OpenSSH), so it also works on SFTP-only accounts without a shell.
+# Supports sftp:[user@]host:path and sftp://[user@]host[:port]//abs/path.
+sftp_free_space() {
+    local repo="${RESTIC_REPOSITORY:-}"
+    if [[ -z "$repo" && -n "${RESTIC_REPOSITORY_FILE:-}" ]]; then
+        repo="$(head -n1 "$RESTIC_REPOSITORY_FILE" 2>/dev/null)" || return 1
+    fi
+    [[ "$repo" == sftp:* ]] || return 1
+    command -v sftp >/dev/null || { warn "sftp not found, cannot read free space"; return 1; }
+
+    local host path port="" re_url='^sftp://([^/]+)/(.*)$' re_scp='^sftp:([^@/]*@)?(\[[^]]*\]|[^:]+):(.*)$'
+    if [[ "$repo" =~ $re_url ]]; then
+        host="${BASH_REMATCH[1]}"; path="${BASH_REMATCH[2]}"
+        if [[ "$host" =~ ^(.*):([0-9]+)$ ]]; then host="${BASH_REMATCH[1]}"; port="${BASH_REMATCH[2]}"; fi
+    elif [[ "$repo" =~ $re_scp ]]; then
+        host="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"; path="${BASH_REMATCH[3]}"
+    else
+        return 1
+    fi
+    path="${path:-.}"
+
+    local -a cmd=(sftp -q -b - -o BatchMode=yes -o ConnectTimeout=15)
+    [[ -n "$port" ]] && cmd+=(-P "$port")
+    command -v timeout >/dev/null && cmd=(timeout 60 "${cmd[@]}")
+    local out size used avail root cap
+    out="$(printf 'df -h "%s"\n' "${path//\"/\\\"}" | "${cmd[@]}" "$host" 2>&1)" \
+        || { warn "cannot read free space of ${host}:${path}: ${out##*$'\n'}"; return 1; }
+    # last line: Size Used Avail (root) %Capacity
+    read -r size used avail root cap <<< "${out##*$'\n'}"
+    [[ "$cap" == *% ]] || { warn "unexpected sftp df output: ${out##*$'\n'}"; return 1; }
+    printf '%s free of %s (%s used)\n' "$avail" "$size" "$cap"
+}
+
 # Build and send the end-of-run Telegram message. $1 = final exit code.
 notify_result() {
-    local rc="$1" icon status
+    local rc="$1" icon status space
     case $rc in
         0) is_true "$TELEGRAM_NOTIFY_SUCCESS" || return 0
            icon="✅"; status="backup succeeded" ;;
@@ -178,6 +215,10 @@ Host: $(hostname 2>/dev/null || echo unknown)
 Duration: ${SECONDS}s"
     (( rc != 0 && rc != 3 )) && [[ -n "$LAST_ERROR" ]] && msg+=$'\n'"Error: ${LAST_ERROR}"
     (( rc != 0 )) && msg+=$'\n'"Log: ${LOG_DIR}/${PROJECT_NAME}.log"
+    if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]] && space="$(sftp_free_space)"; then
+        log "target free space: $space"
+        msg+=$'\n'"Target free space: ${space}"
+    fi
     notify_telegram "$msg" || true
 }
 
