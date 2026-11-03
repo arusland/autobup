@@ -10,6 +10,7 @@
 #   run              (default) pre-hook -> backup -> post-hook -> forget/prune -> check
 #   dry-run          show what would be backed up / forgotten, change nothing
 #   init             initialise the repository
+#   pwd              generate RESTIC_PASSWORD_FILE; fails if it already exists
 #   notify-test      send a test message to the configured Telegram chat
 #   restic <args>    run any restic command with this app's settings, e.g.
 #                      autobup.sh restic snapshots
@@ -138,7 +139,7 @@ log()  { printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$PROJECT_NAME" "$
 warn() { log "WARNING: $*" >&2; }
 die()  { LAST_ERROR="$1"; log "ERROR: $1" >&2; exit "${2:-1}"; }
 
-usage() { sed -n '3,21p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '3,23p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; exit 2; }
 
 is_true()     { [[ "${1,,}" =~ ^(1|y|yes|true|on)$ ]]; }
 is_function() { [[ "$(type -t "$1" 2>/dev/null)" == "function" ]]; }
@@ -314,8 +315,11 @@ validate() {
         || die "RESTIC_REPOSITORY (or RESTIC_REPOSITORY_FILE) is not set" 2
     [[ -n "${RESTIC_PASSWORD:-}${RESTIC_PASSWORD_FILE:-}${RESTIC_PASSWORD_COMMAND:-}" ]] \
         || die "RESTIC_PASSWORD_FILE / RESTIC_PASSWORD / RESTIC_PASSWORD_COMMAND is not set" 2
-    [[ -z "${RESTIC_PASSWORD_FILE:-}" || -r "$RESTIC_PASSWORD_FILE" ]] \
-        || die "password file not readable: $RESTIC_PASSWORD_FILE" 2
+    if [[ -n "${RESTIC_PASSWORD_FILE:-}" && ! -r "$RESTIC_PASSWORD_FILE" ]]; then
+        [[ -e "$RESTIC_PASSWORD_FILE" ]] \
+            || die "password file not readable: $RESTIC_PASSWORD_FILE (run '$SCRIPT_PATH pwd' to create it)" 2
+        die "password file not readable: $RESTIC_PASSWORD_FILE" 2
+    fi
     if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -z "${TELEGRAM_CHAT_ID:-}" ]] \
        || [[ -z "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
         warn "Telegram notifications need both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"
@@ -437,6 +441,44 @@ on_exit() {
     exit "$rc"
 }
 
+# Print the arguments as lines of a box. Red only on a terminal, so that
+# redirected output stays free of escape codes.
+red_box() {
+    local line pad bar on="" off="" width=0
+    for line in "$@"; do (( ${#line} > width )) && width=${#line}; done
+    printf -v bar '%*s' "$(( width + 2 ))" ''
+    bar="${bar// /═}"
+    [[ -t 1 ]] && { on=$'\e[1;31m'; off=$'\e[0m'; }
+    printf '%s╔%s╗%s\n' "$on" "$bar" "$off"
+    for line in "$@"; do
+        printf -v pad '%*s' "$(( width - ${#line} ))" ''
+        printf '%s║ %s%s ║%s\n' "$on" "$line" "$pad" "$off"
+    done
+    printf '%s╚%s╝%s\n' "$on" "$bar" "$off"
+}
+
+# Generate a random repository password. Never overwrites an existing file:
+# noclobber makes the create atomic, and umask 077 makes the file mode 600.
+cmd_pwd() {
+    local file="${RESTIC_PASSWORD_FILE:-}" pass
+    [[ -n "$file" ]] || die "RESTIC_PASSWORD_FILE is not set" 2
+    if [[ -e "$file" || -L "$file" ]]; then
+        die "password file already exists: $file"
+    fi
+    mkdir -p "$(dirname "$file")" || die "cannot create directory for $file"
+    pass="$(head -c 32 /dev/urandom | base64 -w 0)" || die "cannot generate password"
+    [[ ${#pass} -eq 44 ]] || die "cannot generate password"
+    ( set -o noclobber; printf '%s\n' "$pass" > "$file" ) 2>/dev/null \
+        || die "cannot create password file: $file"
+    log "password written to $file"
+    red_box "IMPORTANT: COPY THIS PASSWORD FILE SOMEWHERE ELSE NOW" \
+            "" \
+            "$file" \
+            "" \
+            "Keep the copy off this machine. If the file is lost," \
+            "the backups cannot be restored."
+}
+
 cmd_run() {
     local dry="${1:-}"
     acquire_lock
@@ -471,6 +513,7 @@ main() {
                 || die "could not send Telegram message"
             log "Telegram test message sent"
             exit 0 ;;
+        pwd)            cmd_pwd; exit 0 ;;   # before validate: the file does not exist yet
     esac
     trap on_exit EXIT
     validate

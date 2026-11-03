@@ -33,16 +33,15 @@ and lock.
 
 ```bash
 # 1. Make a copy for your application
-sudo mkdir -p /opt/backup /etc/autobup
+sudo mkdir -p /opt/backup
 sudo cp autobup.sh /opt/backup/myapp-backup.sh
 sudo chmod 700 /opt/backup/myapp-backup.sh
 
-# 2. Create the repository password file
-sudo sh -c 'openssl rand -base64 32 > /etc/autobup/myapp.pass'
-sudo chmod 600 /etc/autobup/myapp.pass
-
-# 3. Edit the SETTINGS block (PROJECT_NAME, RESTIC_REPOSITORY, BACKUP_PATHS, ...)
+# 2. Edit the SETTINGS block (PROJECT_NAME, RESTIC_REPOSITORY, BACKUP_PATHS, ...)
 sudo $EDITOR /opt/backup/myapp-backup.sh
+
+# 3. Generate the repository password file (RESTIC_PASSWORD_FILE)
+sudo /opt/backup/myapp-backup.sh pwd
 
 # 4. Create the repository
 sudo /opt/backup/myapp-backup.sh init
@@ -66,6 +65,7 @@ myapp-backup.sh [command] [args...]
 | `run` (default)  | pre-hook → backup → post-hook → forget/prune → check             |
 | `dry-run`        | Show what would be backed up or forgotten; changes nothing       |
 | `init`           | Initialise the repository                                        |
+| `pwd`            | Generate `RESTIC_PASSWORD_FILE` (mode 600); fails if it exists   |
 | `notify-test`    | Send a test message to the configured Telegram chat              |
 | `restic <args>`  | Run any restic command with this app's settings                  |
 | `help`           | Show usage                                                       |
