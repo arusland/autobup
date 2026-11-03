@@ -36,7 +36,6 @@ RESTIC_REPOSITORY="/mnt/backup/restic"
 # AWS_ACCESS_KEY_ID="..."
 # AWS_SECRET_ACCESS_KEY="..."
 RESTIC_PASSWORD_FILE="/etc/autobup/myapp.pass"   # chmod 600
-AUTO_INIT="yes"                                  # create the repo on first run
 
 # ---- restic binary ------------------------------------------------------
 AUTO_INSTALL_RESTIC="yes"        # download latest restic release if not found
@@ -331,13 +330,7 @@ validate() {
 # steps
 # ---------------------------------------------------------------------------
 ensure_repo() {
-    restic cat config >/dev/null 2>&1 && return 0
-    if is_true "$AUTO_INIT"; then
-        log "repository not accessible, trying to initialise it"
-        restic init || die "cannot open or initialise repository"
-    else
-        restic cat config >/dev/null || die "cannot open repository (AUTO_INIT=no)"
-    fi
+    restic cat config >/dev/null || die "cannot open repository (run '$SCRIPT_PATH init' to create it)"
 }
 
 do_backup() {

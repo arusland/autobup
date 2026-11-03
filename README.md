@@ -44,12 +44,13 @@ sudo chmod 600 /etc/autobup/myapp.pass
 # 3. Edit the SETTINGS block (PROJECT_NAME, RESTIC_REPOSITORY, BACKUP_PATHS, ...)
 sudo $EDITOR /opt/backup/myapp-backup.sh
 
-# 4. Preview, then run the first backup
+# 4. Create the repository
+sudo /opt/backup/myapp-backup.sh init
+
+# 5. Preview, then run the first backup
 sudo /opt/backup/myapp-backup.sh dry-run
 sudo /opt/backup/myapp-backup.sh
 ```
-
-With `AUTO_INIT="yes"` (the default), the first run creates the repository.
 
 > **Keep a copy of the password file somewhere else.** If you lose it, you
 > cannot restore the backups.
@@ -112,7 +113,6 @@ variable there, such as `RESTIC_PASSWORD_COMMAND`, `AWS_*`, `B2_*` or
 | `PROJECT_NAME`         | `myapp`                    | Used in the log and lock file names and in the snapshot tag |
 | `RESTIC_REPOSITORY`    | `/mnt/backup/restic`       | Any restic repository URL                     |
 | `RESTIC_PASSWORD_FILE` | `/etc/autobup/myapp.pass`  | Repository password (`chmod 600`)             |
-| `AUTO_INIT`            | `yes`                      | Create the repository if it does not exist    |
 | `AUTO_INSTALL_RESTIC`  | `yes`                      | Download restic if it is not in `PATH`        |
 | `RESTIC_INSTALL_DIR`   | *(empty)*                  | Install location; empty = `/usr/local/bin` (root) or `~/.local/bin` |
 
