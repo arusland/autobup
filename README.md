@@ -24,8 +24,8 @@ and lock.
 - **Logging** to `LOG_DIR/<PROJECT_NAME>.log`, with timestamps.
 - **Monitoring:**
   - [healthchecks.io](https://healthchecks.io)-compatible pings (start, success, fail).
-  - Telegram notifications. For `sftp:` repositories the message also shows
-    free space on the backup target.
+  - Telegram notifications. For local and `sftp:` repositories the message also
+    shows free space on the backup target.
 - **Low priority:** restic runs under `nice` and `ionice`.
 - Works with every restic backend: local, SFTP, S3, B2, rest-server and others.
 
@@ -167,9 +167,10 @@ Set `TELEGRAM_NOTIFY_SUCCESS="no"` to get messages only for failures and
 partial backups.
 
 The message includes the host, the run duration and, on failure, the error and
-the log path. For `sftp:` repositories it also shows free space on the target,
-read with the sftp `df` command. This needs key-based authentication, as restic
-does, and works on SFTP-only accounts.
+the log path. For local and `sftp:` repositories it also shows free space on the
+target. Local repositories use `df`. SFTP repositories use the sftp `df` command,
+which needs key-based authentication, as restic does, and works on SFTP-only
+accounts.
 
 ## Hooks
 

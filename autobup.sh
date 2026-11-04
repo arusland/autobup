@@ -87,8 +87,8 @@ HEALTHCHECK_URL=""               # e.g. https://hc-ping.com/<uuid> (start/succes
 TELEGRAM_BOT_TOKEN=""            # e.g. 123456789:AAE...
 TELEGRAM_CHAT_ID=""              # e.g. 123456789 or -1001234567890 (group)
 TELEGRAM_NOTIFY_SUCCESS="yes"    # "no" = only report failures and warnings
-# For sftp: repositories the message also shows free space on the target
-# (via the sftp `df` command, needs key-based auth like restic itself).
+# For local and sftp: repositories the message also shows free space on the
+# target (sftp uses its `df` command, needs key-based auth like restic itself).
 
 # ---- hooks ----------------------------------------------------------------
 # Run in a subshell with `set -eo pipefail`: any failing command fails the hook.
@@ -167,16 +167,43 @@ notify_telegram() {
         || { warn "Telegram notification failed"; return 1; }
 }
 
-# For an sftp: repository print the free space of the target folder, e.g.
-# "1.2TB free of 5.0TB (76% used)". Uses the sftp `df` command (statvfs
-# extension of OpenSSH), so it also works on SFTP-only accounts without a shell.
-# Supports sftp:[user@]host:path and sftp://[user@]host[:port]//abs/path.
-sftp_free_space() {
+# Print the free space of the repository target, e.g. "1.2T free of 5.0T
+# (76% used)". Returns 1 for backends without a free-space concept (s3, b2, ...)
+# or when the value cannot be read.
+target_free_space() {
     local repo="${RESTIC_REPOSITORY:-}"
     if [[ -z "$repo" && -n "${RESTIC_REPOSITORY_FILE:-}" ]]; then
         repo="$(head -n1 "$RESTIC_REPOSITORY_FILE" 2>/dev/null)" || return 1
     fi
-    [[ "$repo" == sftp:* ]] || return 1
+    case "$repo" in
+        "")                                      return 1 ;;
+        sftp:*)                                  sftp_free_space "$repo" ;;
+        s3:*|b2:*|rest:*|rclone:*|swift:*|azure:*|gs:*) return 1 ;;
+        *)                                       local_free_space "${repo#local:}" ;;
+    esac
+}
+
+# Free space of a local repository folder. A missing folder is an error and not
+# a reason to look at its parent: an unmounted backup disk would otherwise be
+# reported with the free space of the disk below the mount point.
+local_free_space() {
+    local path="$1"
+    local -a cmd=(df -hP -- "$path")
+    command -v timeout >/dev/null && cmd=(timeout 60 "${cmd[@]}")   # hung NFS mount
+    local out dev size used avail cap
+    out="$("${cmd[@]}" 2>&1)" \
+        || { warn "cannot read free space of ${path}: ${out##*$'\n'}"; return 1; }
+    # last line: Filesystem Size Used Avail Use% Mounted-on
+    read -r dev size used avail cap _ <<< "${out##*$'\n'}"
+    [[ "$cap" == *% ]] || { warn "unexpected df output: ${out##*$'\n'}"; return 1; }
+    printf '%s free of %s (%s used)\n' "$avail" "$size" "$cap"
+}
+
+# Free space of an sftp: repository folder. Uses the sftp `df` command (statvfs
+# extension of OpenSSH), so it also works on SFTP-only accounts without a shell.
+# Supports sftp:[user@]host:path and sftp://[user@]host[:port]//abs/path.
+sftp_free_space() {
+    local repo="$1"
     command -v sftp >/dev/null || { warn "sftp not found, cannot read free space"; return 1; }
 
     local host path port="" re_url='^sftp://([^/]+)/(.*)$' re_scp='^sftp:([^@/]*@)?(\[[^]]*\]|[^:]+):(.*)$'
@@ -216,7 +243,7 @@ Host: $(hostname 2>/dev/null || echo unknown)
 Duration: ${SECONDS}s"
     (( rc != 0 && rc != 3 )) && [[ -n "$LAST_ERROR" ]] && msg+=$'\n'"Error: ${LAST_ERROR}"
     (( rc != 0 )) && msg+=$'\n'"Log: ${LOG_DIR}/${PROJECT_NAME}.log"
-    if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]] && space="$(sftp_free_space)"; then
+    if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]] && space="$(target_free_space)"; then
         log "target free space: $space"
         msg+=$'\n'"Target free space: ${space}"
     fi
