@@ -67,6 +67,7 @@ myapp-backup.sh [command] [args...]
 | `init`           | Initialise the repository                                        |
 | `pwd`            | Generate `RESTIC_PASSWORD_FILE` (mode 600); fails if it exists   |
 | `notify-test`    | Send a test message to the configured Telegram chat              |
+| `view [N]`       | Show the last N snapshots of this app (default 10)               |
 | `restic <args>`  | Run any restic command with this app's settings                  |
 | `help`           | Show usage                                                       |
 

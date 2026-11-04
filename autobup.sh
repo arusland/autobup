@@ -12,7 +12,8 @@
 #   init             initialise the repository
 #   pwd              generate RESTIC_PASSWORD_FILE; fails if it already exists
 #   notify-test      send a test message to the configured Telegram chat
-#   restic <args>    run any restic command with this app's settings, e.g.
+#   view [N]         show the last N snapshots of this app (default 10)
+#   restic <args>   run any restic command with this app's settings, e.g.
 #                      autobup.sh restic snapshots
 #                      autobup.sh restic restore latest --target /tmp/restore
 #
@@ -31,7 +32,7 @@ set -a   # everything in SETTINGS is exported, so restic sees RESTIC_*, AWS_*, B
 PROJECT_NAME="myapp"
 
 # ---- repository -----------------------------------------------------------
-RESTIC_REPOSITORY="/mnt/backup/restic"
+RESTIC_REPOSITORY="/home/ruslan/Documents/TEST-BUP/restic"
 # RESTIC_REPOSITORY="sftp:backup@backup.example.com:/srv/restic/myapp"
 # RESTIC_REPOSITORY="s3:https://s3.eu-central-1.amazonaws.com/my-bucket/myapp"
 # AWS_ACCESS_KEY_ID="..."
@@ -139,7 +140,7 @@ log()  { printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$PROJECT_NAME" "$
 warn() { log "WARNING: $*" >&2; }
 die()  { LAST_ERROR="$1"; log "ERROR: $1" >&2; exit "${2:-1}"; }
 
-usage() { sed -n '3,23p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '3,24p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; exit 2; }
 
 is_true()     { [[ "${1,,}" =~ ^(1|y|yes|true|on)$ ]]; }
 is_function() { [[ "$(type -t "$1" 2>/dev/null)" == "function" ]]; }
@@ -479,6 +480,14 @@ cmd_pwd() {
             "the backups cannot be restored."
 }
 
+# Show the latest snapshots of this app. restic applies --latest per host and
+# path set, so a change in BACKUP_PATHS can list more than N snapshots in total.
+cmd_view() {
+    local count="${1:-10}"
+    [[ $# -le 1 && "$count" =~ ^[1-9][0-9]*$ ]] || die "usage: view [N], N must be a positive number" 2
+    restic snapshots --tag "$PROJECT_TAG" --latest "$count"
+}
+
 cmd_run() {
     local dry="${1:-}"
     acquire_lock
@@ -521,6 +530,7 @@ main() {
         run)      cmd_run ;;
         dry-run)  cmd_run dry ;;
         init)     restic init ;;
+        view)     cmd_view "$@" ;;
         restic)   exec restic "$@" ;;
         *)        die "unknown command: $cmd (see --help)" 2 ;;
     esac
