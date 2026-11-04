@@ -25,7 +25,7 @@ and lock.
 - **Monitoring:**
   - [healthchecks.io](https://healthchecks.io)-compatible pings (start, success, fail).
   - Telegram notifications. For local and `sftp:` repositories the message also
-    shows free space on the backup target.
+    shows free space on the backup target and the repository size.
 - **Low priority:** restic runs under `nice` and `ionice`.
 - Works with every restic backend: local, SFTP, S3, B2, rest-server and others.
 
@@ -68,6 +68,7 @@ myapp-backup.sh [command] [args...]
 | `pwd`            | Generate `RESTIC_PASSWORD_FILE` (mode 600); fails if it exists   |
 | `notify-test`    | Send a test message to the configured Telegram chat              |
 | `view [N]`       | Show the last N snapshots of this app (default 10)               |
+| `space`          | Show free space and repo size (local and `sftp:` repositories)   |
 | `restic <args>`  | Run any restic command with this app's settings                  |
 | `help`           | Show usage                                                       |
 
@@ -168,9 +169,18 @@ partial backups.
 
 The message includes the host, the run duration and, on failure, the error and
 the log path. For local and `sftp:` repositories it also shows free space on the
-target. Local repositories use `df`. SFTP repositories use the sftp `df` command,
-which needs key-based authentication, as restic does, and works on SFTP-only
-accounts.
+target and the repository size. Local repositories use `df` and `du`. SFTP
+repositories use the sftp `df` and `ls` commands, which need key-based
+authentication, as restic does, and work on SFTP-only accounts. If the size cannot
+be read, the script logs a warning and shows only the free space. The `space` command prints the same value on demand. It needs neither
+restic nor the repository password.
+
+The value also says where the space is:
+
+```
+repository size 4.2G, 16G free of 116G (87% used) at /mnt/backup/restic (/dev/sdb1 on /mnt/backup)
+repository size 800G, 1.2T free of 5.0T (76% used) at backup@backup.example.com:/srv/restic/myapp
+```
 
 ## Hooks
 

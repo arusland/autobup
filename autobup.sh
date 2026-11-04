@@ -13,6 +13,7 @@
 #   pwd              generate RESTIC_PASSWORD_FILE; fails if it already exists
 #   notify-test      send a test message to the configured Telegram chat
 #   view [N]         show the last N snapshots of this app (default 10)
+#   space            show free space and repo size (local and sftp: repositories)
 #   restic <args>   run any restic command with this app's settings, e.g.
 #                      autobup.sh restic snapshots
 #                      autobup.sh restic restore latest --target /tmp/restore
@@ -88,7 +89,8 @@ TELEGRAM_BOT_TOKEN=""            # e.g. 123456789:AAE...
 TELEGRAM_CHAT_ID=""              # e.g. 123456789 or -1001234567890 (group)
 TELEGRAM_NOTIFY_SUCCESS="yes"    # "no" = only report failures and warnings
 # For local and sftp: repositories the message also shows free space on the
-# target (sftp uses its `df` command, needs key-based auth like restic itself).
+# target and the repository size (sftp uses its `df` and `ls` commands, needs
+# key-based auth like restic itself).
 
 # ---- hooks ----------------------------------------------------------------
 # Run in a subshell with `set -eo pipefail`: any failing command fails the hook.
@@ -140,7 +142,7 @@ log()  { printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$PROJECT_NAME" "$
 warn() { log "WARNING: $*" >&2; }
 die()  { LAST_ERROR="$1"; log "ERROR: $1" >&2; exit "${2:-1}"; }
 
-usage() { sed -n '3,24p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '3,25p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'; exit 2; }
 
 is_true()     { [[ "${1,,}" =~ ^(1|y|yes|true|on)$ ]]; }
 is_function() { [[ "$(type -t "$1" 2>/dev/null)" == "function" ]]; }
@@ -167,18 +169,22 @@ notify_telegram() {
         || { warn "Telegram notification failed"; return 1; }
 }
 
-# Print the free space of the repository target, e.g. "1.2T free of 5.0T
-# (76% used)". Returns 1 for backends without a free-space concept (s3, b2, ...)
-# or when the value cannot be read.
+# Print the repository size, the free space of the repository target and where
+# it is, e.g. "repository size 800G, 1.2T free of 5.0T (76% used) at
+# /mnt/backup/restic (/dev/sdb1 on /mnt/backup)" or "repository size 800G, 1.2T
+# free of 5.0T (76% used) at backup@host:/srv/restic". A repository size that cannot
+# be read is left out with a warning, the free space is still printed. Returns 1 when the value cannot be read, 2 for backends without
+# a free-space concept (s3, b2, ...).
 target_free_space() {
     local repo="${RESTIC_REPOSITORY:-}"
     if [[ -z "$repo" && -n "${RESTIC_REPOSITORY_FILE:-}" ]]; then
-        repo="$(head -n1 "$RESTIC_REPOSITORY_FILE" 2>/dev/null)" || return 1
+        repo="$(head -n1 "$RESTIC_REPOSITORY_FILE" 2>/dev/null)" \
+            || { warn "cannot read $RESTIC_REPOSITORY_FILE"; return 1; }
     fi
     case "$repo" in
         "")                                      return 1 ;;
         sftp:*)                                  sftp_free_space "$repo" ;;
-        s3:*|b2:*|rest:*|rclone:*|swift:*|azure:*|gs:*) return 1 ;;
+        s3:*|b2:*|rest:*|rclone:*|swift:*|azure:*|gs:*) return 2 ;;
         *)                                       local_free_space "${repo#local:}" ;;
     esac
 }
@@ -190,13 +196,29 @@ local_free_space() {
     local path="$1"
     local -a cmd=(df -hP -- "$path")
     command -v timeout >/dev/null && cmd=(timeout 60 "${cmd[@]}")   # hung NFS mount
-    local out dev size used avail cap
+    local out dev size used avail cap mount
     out="$("${cmd[@]}" 2>&1)" \
         || { warn "cannot read free space of ${path}: ${out##*$'\n'}"; return 1; }
     # last line: Filesystem Size Used Avail Use% Mounted-on
-    read -r dev size used avail cap _ <<< "${out##*$'\n'}"
+    read -r dev size used avail cap mount <<< "${out##*$'\n'}"
     [[ "$cap" == *% ]] || { warn "unexpected df output: ${out##*$'\n'}"; return 1; }
-    printf '%s free of %s (%s used)\n' "$avail" "$size" "$cap"
+    local repo_size
+    repo_size="$(local_repo_size "$path")" || repo_size=""
+    printf '%s%s free of %s (%s used) at %s (%s on %s)\n' \
+        "${repo_size:+repository size $repo_size, }" "$avail" "$size" "$cap" "$path" "$dev" "$mount"
+}
+
+# Disk usage of a local repository folder. du fails on unreadable subfolders, and
+# its partial total would look like a valid size, so that counts as an error.
+local_repo_size() {
+    local path="$1"
+    local -a cmd=(du -sh -- "$path")
+    command -v timeout >/dev/null && cmd=(timeout 300 "${cmd[@]}")
+    local out size
+    out="$("${cmd[@]}" 2>&1)" \
+        || { warn "cannot read repository size of ${path}: ${out%%$'\n'*}"; return 1; }
+    read -r size _ <<< "${out##*$'\n'}"
+    printf '%s\n' "$size"
 }
 
 # Free space of an sftp: repository folder. Uses the sftp `df` command (statvfs
@@ -226,7 +248,40 @@ sftp_free_space() {
     # last line: Size Used Avail (root) %Capacity
     read -r size used avail root cap <<< "${out##*$'\n'}"
     [[ "$cap" == *% ]] || { warn "unexpected sftp df output: ${out##*$'\n'}"; return 1; }
-    printf '%s free of %s (%s used)\n' "$avail" "$size" "$cap"
+    local repo_size
+    repo_size="$(sftp_repo_size "$host" "$path" "$port")" || repo_size=""
+    printf '%s%s free of %s (%s used) at %s%s:%s\n' \
+        "${repo_size:+repository size $repo_size, }" "$avail" "$size" "$cap" "$host" "${port:+:$port}" "$path"
+}
+
+# Total file size of a repository folder on an sftp server, without a shell on the
+# server or the repository password. sftp has no recursive listing, so this lists
+# each folder of the restic layout. A leading "-" keeps the batch going when one
+# of them is missing. $1 = [user@]host, $2 = path, $3 = port or empty.
+sftp_repo_size() {
+    local host="$1" path="${2%/}" port="$3"
+    local -a cmd=(sftp -q -b - -o BatchMode=yes -o ConnectTimeout=15)
+    [[ -n "$port" ]] && cmd+=(-P "$port")
+    command -v timeout >/dev/null && cmd=(timeout 300 "${cmd[@]}")
+    local quoted="${path//\"/\\\"}" sub i out
+    out="$(
+        {
+            for sub in config index keys snapshots locks; do
+                printf -- '-ls -ln "%s/%s"\n' "$quoted" "$sub"
+            done
+            for (( i = 0; i < 256; i++ )); do
+                printf -- '-ls -ln "%s/data/%02x"\n' "$quoted" "$i"
+            done
+        } | "${cmd[@]}" "$host" 2>&1
+    )" || { warn "cannot read repository size of ${host}:${path}: ${out##*$'\n'}"; return 1; }
+
+    # file lines: -rw------- 1 uid gid size month day time name
+    local perm bytes total=0
+    while read -r perm _ _ _ bytes _; do
+        if [[ "$perm" == -* && "$bytes" =~ ^[0-9]+$ ]]; then total=$(( total + bytes )); fi
+    done <<< "$out"
+    (( total > 0 )) || { warn "no repository files found at ${host}:${path}"; return 1; }
+    numfmt --to=iec "$total"
 }
 
 # Build and send the end-of-run Telegram message. $1 = final exit code.
@@ -515,6 +570,21 @@ cmd_view() {
     restic snapshots --tag "$PROJECT_TAG" --latest "$count"
 }
 
+# Show the free space on the repository target. Reads only the target, so it
+# needs neither restic nor the repository password.
+cmd_space() {
+    [[ $# -eq 0 ]] || die "usage: space" 2
+    [[ -n "${RESTIC_REPOSITORY:-}${RESTIC_REPOSITORY_FILE:-}" ]] \
+        || die "RESTIC_REPOSITORY (or RESTIC_REPOSITORY_FILE) is not set" 2
+    local space rc=0
+    space="$(target_free_space)" || rc=$?
+    case $rc in
+        0) printf '%s\n' "$space" ;;
+        2) die "free space is only available for local and sftp: repositories" ;;
+        *) die "cannot read free space of the repository target" ;;
+    esac
+}
+
 cmd_run() {
     local dry="${1:-}"
     acquire_lock
@@ -550,6 +620,7 @@ main() {
             log "Telegram test message sent"
             exit 0 ;;
         pwd)            cmd_pwd; exit 0 ;;   # before validate: the file does not exist yet
+        space)          cmd_space "$@"; exit 0 ;;   # before validate: needs no restic or password
     esac
     trap on_exit EXIT
     validate
