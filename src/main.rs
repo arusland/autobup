@@ -26,7 +26,7 @@ Exit codes: 0 ok, 1 failure, 2 config error, 3 backup done but some files
 were unreadable, 4 a previous run of this app is still running.
 
 Cron example (daily at 03:15):
-  15 3 * * * /usr/local/bin/autobup -c /etc/autobup/myapp.toml >/dev/null 2>&1";
+  15 3 * * * /usr/local/bin/autobup -c /srv/myapp/autobup.toml >/dev/null 2>&1";
 
 #[derive(Parser)]
 #[command(version, about = "Unattended per-application backups with restic", after_help = AFTER_HELP)]
@@ -58,6 +58,15 @@ enum Cmd {
     },
     /// Show free space and repo size (local and sftp: repositories)
     Space,
+    /// Create a config file for a project directory (name = directory name)
+    Config {
+        /// Project directory to back up
+        #[arg(default_value = ".", value_name = "DIR")]
+        dir: PathBuf,
+        /// Where to write the config [default: DIR/autobup.toml]
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+    },
     /// Run any restic command with this app's settings, e.g. `restic snapshots`
     Restic {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
@@ -95,6 +104,9 @@ fn setup_process() {
 }
 
 fn real_main(cli: Cli) -> Result<()> {
+    if let Some(Cmd::Config { dir, output }) = &cli.command {
+        return commands::config::execute(dir, output.as_deref());
+    }
     let config_path = cli
         .config
         .ok_or_else(|| AppError::config("no config file given: use -c FILE or set AUTOBUP_CONFIG"))?;
@@ -111,5 +123,6 @@ fn real_main(cli: Cli) -> Result<()> {
         Cmd::View { count } => commands::view::execute(&ctx, count),
         Cmd::Space => commands::space::execute(&ctx),
         Cmd::Restic { args } => commands::restic::execute(&ctx, &args),
+        Cmd::Config { .. } => unreachable!("handled above"),
     }
 }

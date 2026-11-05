@@ -357,14 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn full_config_parses() {
-        let cfg = Config::parse(include_str!("../examples/myapp.toml")).unwrap();
-        assert_eq!(cfg.project_name, "myapp");
-        assert_eq!(cfg.retention.keep_daily, Some(7));
-        assert!(!cfg.backup.paths.is_empty());
-    }
-
-    #[test]
     fn unknown_fields_are_rejected() {
         assert!(Config::parse("project_name = \"app\"\n[backup]\npath = []").is_err());
     }

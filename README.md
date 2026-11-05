@@ -38,20 +38,19 @@ cargo install --path .        # installs autobup to ~/.cargo/bin
 ## Quick start
 
 ```bash
-# 1. Create a config for your application
-mkdir -p ~/.config/autobup
-install -m 600 examples/myapp.toml ~/.config/autobup/myapp.toml
-$EDITOR ~/.config/autobup/myapp.toml   # project_name, repository, backup.paths, ...
+# 1. Create a config for your application (project name = directory name)
+autobup config /srv/myapp              # writes /srv/myapp/autobup.toml
+$EDITOR /srv/myapp/autobup.toml        # repository, backup.paths, hooks, ...
 
 # 2. Generate the repository password file (repository.password_file)
-autobup -c ~/.config/autobup/myapp.toml pwd
+autobup -c /srv/myapp/autobup.toml pwd
 
 # 3. Create the repository
-autobup -c ~/.config/autobup/myapp.toml init
+autobup -c /srv/myapp/autobup.toml init
 
 # 4. Preview, then run the first backup
-autobup -c ~/.config/autobup/myapp.toml dry-run
-autobup -c ~/.config/autobup/myapp.toml
+autobup -c /srv/myapp/autobup.toml dry-run
+autobup -c /srv/myapp/autobup.toml
 ```
 
 > **Keep a copy of the password file somewhere else.** If you lose it, you
@@ -73,6 +72,7 @@ The config file can also be given with the `AUTOBUP_CONFIG` environment variable
 | `run` (default)  | pre-hook → backup → post-hook → forget/prune → check             |
 | `dry-run`        | Show what would be backed up or forgotten; changes nothing       |
 | `init`           | Initialise the repository                                        |
+| `config [DIR]`   | Create a config for project DIR (default `.`); see below         |
 | `pwd`            | Generate the password file (mode 600); fails if it exists        |
 | `notify-test`    | Send a test message to the configured Telegram chat              |
 | `view [N]`       | Show the last N snapshots of this app (default 10)               |
@@ -80,12 +80,19 @@ The config file can also be given with the `AUTOBUP_CONFIG` environment variable
 | `restic <args>`  | Run any restic command with this app's settings                  |
 | `help`           | Show usage                                                       |
 
+`config` needs no `-c`. It names the project after the directory, backs up
+that directory, and writes `DIR/autobup.toml` (mode 600), or the file given
+with `-o FILE`. If that file exists it stops with an error (exit 2) and leaves it as it is. The generated
+file documents every setting in comments.
+
 Examples:
 
 ```bash
-autobup -c ~/.config/autobup/myapp.toml restic snapshots
-autobup -c ~/.config/autobup/myapp.toml restic restore latest --target /tmp/restore
-autobup -c ~/.config/autobup/myapp.toml restic mount /mnt/restore
+autobup config ~/projects/shop               # ~/projects/shop/autobup.toml
+autobup config ~/projects/shop -o ~/.config/autobup/shop.toml
+autobup -c /srv/myapp/autobup.toml restic snapshots
+autobup -c /srv/myapp/autobup.toml restic restore latest --target /tmp/restore
+autobup -c /srv/myapp/autobup.toml restic mount /mnt/restore
 ```
 
 ### Scheduling
@@ -93,7 +100,7 @@ autobup -c ~/.config/autobup/myapp.toml restic mount /mnt/restore
 Cron (daily at 03:15), added with `crontab -e`:
 
 ```cron
-15 3 * * * $HOME/.cargo/bin/autobup -c $HOME/.config/autobup/myapp.toml >/dev/null 2>&1
+15 3 * * * $HOME/.cargo/bin/autobup -c /srv/myapp/autobup.toml >/dev/null 2>&1
 ```
 
 autobup sets its own `PATH` and writes to its log file, so you can discard
@@ -111,8 +118,8 @@ cron's output.
 
 ## Configuration
 
-See [`examples/myapp.toml`](examples/myapp.toml) for a complete, commented
-example. Unknown keys are rejected, so typos are caught early.
+Run `autobup config` to get a complete, commented config
+(template: [`src/commands/config_template.toml`](src/commands/config_template.toml)). Unknown keys are rejected, so typos are caught early.
 
 ### Paths
 
