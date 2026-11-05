@@ -1,0 +1,20 @@
+[package]
+name = "autobup"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Unattended per-application backups with restic"
+
+[dependencies]
+base64 = "0.23.1"
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+gethostname = "1.1.0"
+nix = { version = "0.31.3", features = ["fs"] }
+rand = "0.10.3"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.0"
+ureq = "3.5.1"
+wait-timeout = "0.2.1"
+walkdir = "2.5.0"
