@@ -9,12 +9,13 @@ const MAX_CHARS: usize = 4000;
 /// Send a plain-text message to the configured chat. Does nothing if
 /// Telegram is not configured.
 pub fn send(cfg: &Config, text: &str) -> Result<(), String> {
-    let (Some(token), Some(chat_id)) = (
-        non_empty(&cfg.telegram.bot_token),
-        non_empty(&cfg.telegram.chat_id),
-    ) else {
+    let Some(chat_id) = non_empty(&cfg.telegram.chat_id) else {
         return Ok(());
     };
+    let Some(token) = cfg.bot_token()? else {
+        return Ok(());
+    };
+    let token = token.as_str();
     let text = truncate(text);
     let url = format!("https://api.telegram.org/bot{token}/sendMessage");
     let form = [

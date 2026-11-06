@@ -7,7 +7,7 @@ use crate::{log, telegram};
 pub fn execute(ctx: &Ctx) -> Result<()> {
     if !ctx.cfg.telegram_configured() {
         return Err(AppError::config(
-            "set telegram.bot_token and telegram.chat_id first",
+            "set telegram.chat_id and telegram.bot_token (or bot_token_file) first",
         ));
     }
     let msg = format!(

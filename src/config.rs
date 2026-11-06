@@ -133,6 +133,8 @@ impl Default for Runtime {
 #[serde(deny_unknown_fields, default)]
 pub struct Telegram {
     pub bot_token: Option<String>,
+    /// File holding the bot token, as an alternative to `bot_token`.
+    pub bot_token_file: Option<String>,
     pub chat_id: Option<String>,
     pub notify_success: bool,
 }
@@ -141,6 +143,7 @@ impl Default for Telegram {
     fn default() -> Self {
         Self {
             bot_token: None,
+            bot_token_file: None,
             chat_id: None,
             notify_success: true,
         }
@@ -184,6 +187,9 @@ impl Config {
         if !(1..=3).contains(&cfg.runtime.ionice_class) {
             return Err("runtime.ionice_class must be 1, 2 or 3".into());
         }
+        if non_empty(&cfg.telegram.bot_token).is_some() && non_empty(&cfg.telegram.bot_token_file).is_some() {
+            return Err("set only one of telegram.bot_token and telegram.bot_token_file".into());
+        }
         Ok(cfg)
     }
 
@@ -210,6 +216,7 @@ impl Config {
             *p = expand_home(p, home)?;
         }
         opt(&mut self.backup.exclude_file)?;
+        opt(&mut self.telegram.bot_token_file)?;
         path(&mut self.runtime.log_dir)?;
         path(&mut self.runtime.lock_dir)?;
         Ok(())
@@ -223,8 +230,28 @@ impl Config {
         self.runtime.log_dir.join(format!("{}.log", self.project_name))
     }
 
+    fn has_bot_token(&self) -> bool {
+        non_empty(&self.telegram.bot_token).is_some() || non_empty(&self.telegram.bot_token_file).is_some()
+    }
+
     pub fn telegram_configured(&self) -> bool {
-        non_empty(&self.telegram.bot_token).is_some() && non_empty(&self.telegram.chat_id).is_some()
+        self.has_bot_token() && non_empty(&self.telegram.chat_id).is_some()
+    }
+
+    /// The bot token from `bot_token`, or read from `bot_token_file`.
+    pub fn bot_token(&self) -> std::result::Result<Option<String>, String> {
+        if let Some(token) = non_empty(&self.telegram.bot_token) {
+            return Ok(Some(token.to_string()));
+        }
+        let Some(file) = non_empty(&self.telegram.bot_token_file) else {
+            return Ok(None);
+        };
+        let text = std::fs::read_to_string(file)
+            .map_err(|e| format!("cannot read telegram.bot_token_file {file}: {e}"))?;
+        match text.trim() {
+            "" => Err(format!("telegram.bot_token_file {file} is empty")),
+            token => Ok(Some(token.to_string())),
+        }
     }
 
     fn has_secrets(&self) -> bool {
@@ -324,8 +351,17 @@ pub fn validate(cfg: &Config, config_path: &Path) -> Result<()> {
             config_path.display()
         )));
     }
-    if non_empty(&cfg.telegram.bot_token).is_some() != non_empty(&cfg.telegram.chat_id).is_some() {
-        log::warn("Telegram notifications need both telegram.bot_token and telegram.chat_id");
+    if cfg.has_bot_token() != non_empty(&cfg.telegram.chat_id).is_some() {
+        log::warn("Telegram notifications need telegram.chat_id and telegram.bot_token (or bot_token_file)");
+    }
+    if let Some(file) = non_empty(&cfg.telegram.bot_token_file) {
+        match std::fs::metadata(file) {
+            Err(e) => log::warn(format!("cannot read telegram.bot_token_file {file}: {e}")),
+            Ok(meta) if meta.permissions().mode() & 0o044 != 0 => {
+                log::warn(format!("bot token file is readable by others: chmod 600 {file}"))
+            }
+            Ok(_) => {}
+        }
     }
     if cfg.has_secrets()
         && let Ok(meta) = std::fs::metadata(config_path)
@@ -430,6 +466,44 @@ pre_backup = "echo ~"
         assert_eq!(cfg.runtime.log_dir, PathBuf::from("/home/u/.local/state/autobup"));
         assert_eq!(cfg.runtime.lock_dir, PathBuf::from("/home/u/.cache"));
         assert_eq!(cfg.hooks.pre_backup.as_deref(), Some("echo ~"));
+    }
+
+    #[test]
+    fn bot_token_from_file() {
+        let dir = std::env::temp_dir().join(format!("autobup-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("token");
+        std::fs::write(&file, "123:abc\n").unwrap();
+        let cfg = Config::parse(&format!(
+            "project_name = \"app\"\n[telegram]\nbot_token_file = {:?}\nchat_id = \"1\"",
+            file.to_str().unwrap()
+        ))
+        .unwrap();
+        assert!(cfg.telegram_configured());
+        assert_eq!(cfg.bot_token().unwrap().as_deref(), Some("123:abc"));
+
+        std::fs::write(&file, "  \n").unwrap();
+        assert!(cfg.bot_token().unwrap_err().contains("is empty"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(cfg.bot_token().unwrap_err().contains("cannot read"));
+    }
+
+    #[test]
+    fn bot_token_and_file_are_exclusive() {
+        let err =
+            Config::parse("project_name = \"app\"\n[telegram]\nbot_token = \"x\"\nbot_token_file = \"/t\"")
+                .unwrap_err();
+        assert!(err.contains("only one of"));
+    }
+
+    #[test]
+    fn bot_token_file_is_expanded() {
+        let cfg = Config::parse_with_home(
+            "project_name = \"app\"\n[telegram]\nbot_token_file = \"~/tg.token\"",
+            Some("/home/u"),
+        )
+        .unwrap();
+        assert_eq!(cfg.telegram.bot_token_file.as_deref(), Some("/home/u/tg.token"));
     }
 
     #[test]

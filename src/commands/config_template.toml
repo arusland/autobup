@@ -48,12 +48,13 @@ enabled = false
 [runtime]
 # healthcheck_url = "https://hc-ping.com/<uuid>" # pinged on start/success/fail
 
-# Both bot_token and chat_id empty/missing = disabled.
+# Both bot_token (or bot_token_file) and chat_id empty/missing = disabled.
 # Create a bot with @BotFather to get the token. Chat id: send the bot a
 # message, then open https://api.telegram.org/bot<TOKEN>/getUpdates.
 # Test with `autobup -c ... notify-test`.
 [telegram]
 # bot_token = "123456789:AAE..."
+# bot_token_file = "~/.config/autobup/telegram.token" # instead of bot_token, mode 600
 # chat_id = "123456789"                          # or "-1001234567890" for a group
 notify_success = true                            # false = only failures and warnings
 

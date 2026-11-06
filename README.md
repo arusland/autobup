@@ -130,8 +130,8 @@ Run `autobup config` to get a complete, commented config
 `~` (as `~` or `~/...`) and `$HOME` / `${HOME}` are expanded in these settings:
 `repository.url` (local repositories only, remote URLs such as `sftp:` are
 left as they are), `repository.url_file`, `repository.password_file`,
-`backup.paths`, `backup.exclude_file`, `runtime.log_dir` and
-`runtime.lock_dir`. `~user` is not supported. Other settings and `[env]`
+`backup.paths`, `backup.exclude_file`, `telegram.bot_token_file`,
+`runtime.log_dir` and `runtime.lock_dir`. `~user` is not supported. Other settings and `[env]`
 values are passed on unchanged.
 
 ```toml
@@ -204,6 +204,16 @@ Any extra environment variables for restic and the hooks, such as `AWS_*`,
    Group chat ids are negative, for example `-100...`.
 3. Set `bot_token` and `chat_id`, then run `autobup -c ... notify-test`.
 
+To keep the token out of the config, put it in a file (mode 600) and set
+`bot_token_file` instead of `bot_token`. Surrounding whitespace is ignored.
+Setting both is an error.
+
+```toml
+[telegram]
+bot_token_file = "~/.config/autobup/telegram.token"
+chat_id = "123456789"
+```
+
 Set `notify_success = false` to get messages only for failures and partial
 backups.
 
@@ -257,6 +267,7 @@ post_backup = "rm -f /var/backups/myapp-db/*.sql.gz"
   `[env]`) in the config, make it `chmod 600`. autobup warns you if it is
   readable by other users.
 - The Telegram token is used in-process and never passed on a command line.
+  With `bot_token_file`, autobup warns if the file is readable by other users.
 - `pwd` never overwrites an existing file.
 
 ## Requirements
