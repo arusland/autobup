@@ -1,11 +1,6 @@
 # autobup config for __NAME__, created by `autobup config`.
 # Usage: autobup -c __CONFIG__ [command]
 # Keep this file chmod 600 if it contains secrets.
-#
-# Path settings may use ~ and $HOME: repository.url (local repositories only),
-# repository.url_file, repository.password_file, backup.paths,
-# backup.exclude_file, runtime.log_dir and runtime.lock_dir. ~user is not
-# supported. Unknown keys are rejected, so typos are caught early.
 
 # Used for the log file name, lock file name and "project:<name>" snapshot tag.
 project_name = __NAME_VALUE__
@@ -51,11 +46,6 @@ enabled = false
 # read_data_subset = "5%"                        # also read part of the pack data
 
 [runtime]
-# If log_dir is not writable, autobup logs to stdout only.
-log_dir = "~/.local/state/autobup"
-lock_dir = "~/.cache/autobup"
-nice_level = 10                                  # CPU priority
-ionice_class = 2                                 # 1 = realtime, 2 = best-effort, 3 = idle
 # healthcheck_url = "https://hc-ping.com/<uuid>" # pinged on start/success/fail
 
 # Both bot_token and chat_id empty/missing = disabled.
