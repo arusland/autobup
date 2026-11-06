@@ -114,11 +114,17 @@ fn restic_failed(e: std::io::Error) -> AppError {
     AppError::fail(format!("cannot run restic: {e}"))
 }
 
+/// Show and run a restic command, with its output also going to the log file.
+fn run_restic(cmd: &mut std::process::Command) -> Result<std::process::ExitStatus> {
+    restic::show(cmd);
+    proc::run_logged(cmd).map_err(restic_failed)
+}
+
 fn ensure_repo(ctx: &Ctx) -> Result<()> {
-    let out = restic::command(&ctx.cfg)
-        .args(["cat", "config"])
-        .output()
-        .map_err(restic_failed)?;
+    let mut cmd = restic::command(&ctx.cfg);
+    cmd.args(["cat", "config"]);
+    restic::show(&cmd);
+    let out = cmd.output().map_err(restic_failed)?;
     if out.status.success() {
         return Ok(());
     }
@@ -155,14 +161,12 @@ fn backup(ctx: &Ctx, dry: bool) -> Result<bool> {
         "backing up: {}",
         paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(" ")
     ));
-    let status = proc::run_logged(
-        restic::niced(cfg)
-            .arg("backup")
-            .args(restic::backup_args(cfg, dry))
-            .arg("--")
-            .args(&paths),
-    )
-    .map_err(restic_failed)?;
+    let mut cmd = restic::niced(cfg);
+    cmd.arg("backup")
+        .args(restic::backup_args(cfg, dry))
+        .arg("--")
+        .args(&paths);
+    let status = run_restic(&mut cmd)?;
     match proc::exit_code(status) {
         0 => {
             log::info("backup finished");
@@ -183,7 +187,7 @@ fn forget(ctx: &Ctx, dry: bool) -> Result<()> {
         return Ok(());
     };
     log::info("applying retention policy");
-    let status = proc::run_logged(restic::niced(cfg).arg("forget").args(args)).map_err(restic_failed)?;
+    let status = run_restic(restic::niced(cfg).arg("forget").args(args))?;
     if status.success() {
         Ok(())
     } else {
@@ -197,8 +201,7 @@ fn check(ctx: &Ctx) -> Result<()> {
         return Ok(());
     }
     log::info("checking repository");
-    let status = proc::run_logged(restic::niced(cfg).arg("check").args(restic::check_args(cfg)))
-        .map_err(restic_failed)?;
+    let status = run_restic(restic::niced(cfg).arg("check").args(restic::check_args(cfg)))?;
     if status.success() {
         Ok(())
     } else {

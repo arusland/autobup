@@ -9,6 +9,9 @@ use crate::{config, restic};
 pub fn execute(ctx: &Ctx, args: &[String]) -> Result<()> {
     config::validate(&ctx.cfg, &ctx.config_path)?;
     // exec only returns on failure
-    let err = restic::command(&ctx.cfg).args(args).exec();
+    let mut cmd = restic::command(&ctx.cfg);
+    cmd.args(args);
+    restic::show(&cmd);
+    let err = cmd.exec();
     Err(AppError::fail(format!("cannot run restic: {err}")))
 }

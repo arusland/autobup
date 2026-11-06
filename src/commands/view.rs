@@ -9,14 +9,16 @@ use crate::{config, proc, restic};
 
 pub fn execute(ctx: &Ctx, count: u32) -> Result<()> {
     config::validate(&ctx.cfg, &ctx.config_path)?;
-    let status = restic::command(&ctx.cfg)
-        .args([
-            "snapshots",
-            "--tag",
-            &ctx.cfg.project_tag(),
-            "--latest",
-            &count.to_string(),
-        ])
+    let mut cmd = restic::command(&ctx.cfg);
+    cmd.args([
+        "snapshots",
+        "--tag",
+        &ctx.cfg.project_tag(),
+        "--latest",
+        &count.to_string(),
+    ]);
+    restic::show(&cmd);
+    let status = cmd
         .status()
         .map_err(|e| AppError::fail(format!("cannot run restic: {e}")))?;
     if status.success() {

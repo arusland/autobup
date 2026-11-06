@@ -1,7 +1,7 @@
 //! Timestamped log lines on stdout/stderr, optionally copied to a log file.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
@@ -36,6 +36,24 @@ fn line(msg: &str) -> String {
 
 pub fn info(msg: impl AsRef<str>) {
     raw(line(msg.as_ref()).as_bytes(), false);
+}
+
+/// "running: <argv>" on stderr, so it does not mix with output meant for
+/// pipes. The command is shown in blue on a terminal (unless NO_COLOR is set);
+/// the log file gets plain text.
+pub fn command(argv: &str) {
+    let plain = line(&format!("running: {argv}"));
+    let mut err = io::stderr().lock();
+    if err.is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()) {
+        let _ = write!(err, "{}", line(&format!("running: \x1b[34m{argv}\x1b[0m")));
+    } else {
+        let _ = err.write_all(plain.as_bytes());
+    }
+    let _ = err.flush();
+    drop(err);
+    if let Some(file) = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        let _ = file.write_all(plain.as_bytes());
+    }
 }
 
 pub fn warn(msg: impl AsRef<str>) {

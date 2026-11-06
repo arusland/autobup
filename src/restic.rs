@@ -3,7 +3,7 @@
 use std::process::Command;
 
 use crate::config::{Config, non_empty};
-use crate::proc;
+use crate::{log, proc};
 
 pub const RESTIC: &str = "restic";
 
@@ -41,6 +41,29 @@ pub fn command(cfg: &Config) -> Command {
     let mut cmd = Command::new(RESTIC);
     cmd.envs(env_pairs(cfg));
     cmd
+}
+
+/// Log the command line of `cmd` (program and arguments, not the environment,
+/// which may hold secrets) before it is run.
+pub fn show(cmd: &Command) {
+    let argv = std::iter::once(cmd.get_program())
+        .chain(cmd.get_args())
+        .map(|a| shell_quote(&a.to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    log::command(&argv);
+}
+
+/// Quote `s` for a POSIX shell, leaving plain words as they are.
+fn shell_quote(s: &str) -> String {
+    let plain = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,+@%^".contains(c));
+    if plain {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
 }
 
 /// `restic` under `nice` and `ionice` (where available) with this app's environment.
@@ -137,6 +160,15 @@ mod tests {
 
     fn cfg(extra: &str) -> Config {
         Config::parse(&format!("project_name = \"app\"\n{extra}")).unwrap()
+    }
+
+    #[test]
+    fn shell_quote_args() {
+        assert_eq!(shell_quote("--tag"), "--tag");
+        assert_eq!(shell_quote("project:app"), "project:app");
+        assert_eq!(shell_quote("/a b"), "'/a b'");
+        assert_eq!(shell_quote("it's"), r"'it'\''s'");
+        assert_eq!(shell_quote(""), "''");
     }
 
     #[test]
