@@ -63,9 +63,13 @@ are skipped and the run ends with exit code 3.
 
 ```
 autobup -c <FILE> [command] [args...]
+autobup <DIR> [command] [args...]
 ```
 
-The config file can also be given with the `AUTOBUP_CONFIG` environment variable.
+`DIR` is a project directory containing `autobup.toml`, e.g.
+`autobup ~/Projects/my-project/ dry-run`. `-c` also accepts a directory.
+The config file can also be given with the `AUTOBUP_CONFIG` environment
+variable; a `DIR` or `-c` on the command line takes precedence over it.
 
 | Command          | Description                                                      |
 |------------------|------------------------------------------------------------------|

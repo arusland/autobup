@@ -26,14 +26,20 @@ Exit codes: 0 ok, 1 failure, 2 config error, 3 backup done but some files
 were unreadable, 4 a previous run of this app is still running.
 
 Cron example (daily at 03:15):
-  15 3 * * * /usr/local/bin/autobup -c /srv/myapp/autobup.toml >/dev/null 2>&1";
+  15 3 * * * /usr/local/bin/autobup -c /srv/myapp/autobup.toml >/dev/null 2>&1
+  15 3 * * * /usr/local/bin/autobup /srv/myapp >/dev/null 2>&1";
 
 #[derive(Parser)]
 #[command(version, about = "Unattended per-application backups with restic", after_help = AFTER_HELP)]
 struct Cli {
-    /// Application config file (TOML)
-    #[arg(short, long, env = "AUTOBUP_CONFIG", value_name = "FILE")]
+    /// Application config file (TOML), or a directory containing autobup.toml
+    /// [env: AUTOBUP_CONFIG=]
+    #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
+
+    /// Project directory containing autobup.toml (alternative to -c)
+    #[arg(value_name = "DIR", conflicts_with = "config")]
+    dir: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Cmd>,
@@ -107,9 +113,13 @@ fn real_main(cli: Cli) -> Result<()> {
     if let Some(Cmd::Config { dir, output }) = &cli.command {
         return commands::config::execute(dir, output.as_deref());
     }
-    let config_path = cli
-        .config
-        .ok_or_else(|| AppError::config("no config file given: use -c FILE or set AUTOBUP_CONFIG"))?;
+    // Command line wins over AUTOBUP_CONFIG (read here, not via clap, so that
+    // the env var does not conflict with DIR).
+    let from_env = || std::env::var_os("AUTOBUP_CONFIG").filter(|v| !v.is_empty()).map(PathBuf::from);
+    let config_path = cli.dir.or(cli.config).or_else(from_env).ok_or_else(|| {
+        AppError::config("no config file given: pass a project DIR, use -c FILE or set AUTOBUP_CONFIG")
+    })?;
+    let config_path = resolve_config_path(config_path)?;
     let cfg = Config::load(&config_path)?;
     log::set_project(&cfg.project_name);
     let ctx = Ctx { cfg, config_path };
@@ -125,4 +135,20 @@ fn real_main(cli: Cli) -> Result<()> {
         Cmd::Restic { args } => commands::restic::execute(&ctx, &args),
         Cmd::Config { .. } => unreachable!("handled above"),
     }
+}
+
+/// A directory means "the autobup.toml inside it".
+fn resolve_config_path(path: PathBuf) -> Result<PathBuf> {
+    if !path.is_dir() {
+        return Ok(path);
+    }
+    let file = path.join(commands::config::DEFAULT_FILE);
+    if !file.is_file() {
+        return Err(AppError::config(format!(
+            "no {} found in directory {}",
+            commands::config::DEFAULT_FILE,
+            path.display()
+        )));
+    }
+    Ok(file)
 }
