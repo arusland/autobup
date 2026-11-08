@@ -41,6 +41,10 @@ struct Cli {
     #[arg(value_name = "DIR", conflicts_with = "config")]
     dir: Option<PathBuf>,
 
+    /// Pass --verbose to restic
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -82,6 +86,7 @@ enum Cmd {
 
 fn main() {
     let cli = Cli::parse();
+    restic::set_verbose(cli.verbose);
     setup_process();
     let code = match real_main(cli) {
         Ok(()) => 0,

@@ -1,11 +1,28 @@
 //! Building and running restic commands. restic is always run as `restic` from PATH.
 
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::{Config, non_empty};
 use crate::{log, proc};
 
 pub const RESTIC: &str = "restic";
+
+static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// Pass `--verbose` to every restic command run from now on.
+pub fn set_verbose(on: bool) {
+    VERBOSE.store(on, Ordering::Relaxed);
+}
+
+/// Global restic flags chosen on our command line.
+fn global_args() -> &'static [&'static str] {
+    if VERBOSE.load(Ordering::Relaxed) {
+        &["--verbose"]
+    } else {
+        &[]
+    }
+}
 
 /// Environment passed to restic and the hooks: repository settings first,
 /// then the `[env]` table (which may override them).
@@ -39,7 +56,7 @@ pub fn effective_env(cfg: &Config, key: &str) -> Option<String> {
 /// `restic` with this app's environment.
 pub fn command(cfg: &Config) -> Command {
     let mut cmd = Command::new(RESTIC);
-    cmd.envs(env_pairs(cfg));
+    cmd.args(global_args()).envs(env_pairs(cfg));
     cmd
 }
 
@@ -76,6 +93,7 @@ pub fn niced(cfg: &Config) -> Command {
         argv.extend(["ionice".into(), "-c".into(), cfg.runtime.ionice_class.to_string()]);
     }
     argv.push(RESTIC.into());
+    argv.extend(global_args().iter().map(|a| a.to_string()));
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]).envs(env_pairs(cfg));
     cmd
