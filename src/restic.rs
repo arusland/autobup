@@ -4,7 +4,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::{Config, non_empty};
-use crate::{log, proc};
+use crate::log;
 
 pub const RESTIC: &str = "restic";
 
@@ -81,22 +81,6 @@ fn shell_quote(s: &str) -> String {
     } else {
         format!("'{}'", s.replace('\'', r"'\''"))
     }
-}
-
-/// `restic` under `nice` and `ionice` (where available) with this app's environment.
-pub fn niced(cfg: &Config) -> Command {
-    let mut argv: Vec<String> = Vec::new();
-    if proc::in_path("nice") {
-        argv.extend(["nice".into(), "-n".into(), cfg.runtime.nice_level.to_string()]);
-    }
-    if proc::in_path("ionice") {
-        argv.extend(["ionice".into(), "-c".into(), cfg.runtime.ionice_class.to_string()]);
-    }
-    argv.push(RESTIC.into());
-    argv.extend(global_args().iter().map(|a| a.to_string()));
-    let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..]).envs(env_pairs(cfg));
-    cmd
 }
 
 /// Arguments for `restic backup` (without the paths).

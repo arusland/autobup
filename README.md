@@ -23,7 +23,6 @@ dependency: autobup always runs `restic` from `PATH`.
   - [healthchecks.io](https://healthchecks.io)-compatible pings (start, success, fail).
   - Telegram notifications. For local and `sftp:` repositories the message also
     shows free space on the backup target and the repository size.
-- **Low priority:** restic runs under `nice` and `ionice`.
 - Works with every restic backend: local, SFTP, S3, B2, rest-server and others.
 
 ## Install
@@ -187,8 +186,6 @@ not use it. If none is set, the forget step is skipped. With `prune = true`
 |-------------------|--------------------|--------------------------------------------------|
 | `log_dir`         | `/var/log/autobup` | Log directory; if it is not writable, autobup logs to stdout only. Use e.g. `~/.local/state/autobup` when not running as root |
 | `lock_dir`        | `/tmp`             | Lock file directory                              |
-| `nice_level`      | `10`               | CPU priority                                     |
-| `ionice_class`    | `2`                | I/O class: 1 = realtime, 2 = best-effort, 3 = idle |
 | `healthcheck_url` |                    | e.g. `https://hc-ping.com/<uuid>`                |
 
 ### `[env]`
@@ -274,7 +271,7 @@ post_backup = "rm -f /var/backups/myapp-db/*.sql.gz"
 
 - Linux
 - `restic` in `PATH`
-- `bash` for hooks; `nice` and `ionice` are used when available
+- `bash` for hooks
 - `sftp` (OpenSSH) for the free-space report on SFTP repositories
 - `HOME` set in the environment when the config uses `~` or `$HOME` (cron sets it)
 - Rust 1.89+ to build

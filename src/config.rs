@@ -112,8 +112,6 @@ pub struct Check {
 pub struct Runtime {
     pub log_dir: PathBuf,
     pub lock_dir: PathBuf,
-    pub nice_level: i32,
-    pub ionice_class: u8,
     pub healthcheck_url: Option<String>,
 }
 
@@ -122,8 +120,6 @@ impl Default for Runtime {
         Self {
             log_dir: PathBuf::from("/var/log/autobup"),
             lock_dir: PathBuf::from("/tmp"),
-            nice_level: 10,
-            ionice_class: 2,
             healthcheck_url: None,
         }
     }
@@ -183,9 +179,6 @@ impl Config {
                 "project_name {:?} must be a non-empty file name",
                 cfg.project_name
             ));
-        }
-        if !(1..=3).contains(&cfg.runtime.ionice_class) {
-            return Err("runtime.ionice_class must be 1, 2 or 3".into());
         }
         if non_empty(&cfg.telegram.bot_token).is_some() && non_empty(&cfg.telegram.bot_token_file).is_some() {
             return Err("set only one of telegram.bot_token and telegram.bot_token_file".into());
@@ -386,7 +379,6 @@ mod tests {
         assert!(!cfg.backup.one_file_system);
         assert!(cfg.retention.prune);
         assert_eq!(cfg.retention.keep_daily, None);
-        assert_eq!(cfg.runtime.nice_level, 10);
         assert_eq!(cfg.runtime.log_dir, PathBuf::from("/var/log/autobup"));
         assert!(cfg.telegram.notify_success);
         assert_eq!(cfg.project_tag(), "project:app");

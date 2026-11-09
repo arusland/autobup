@@ -161,7 +161,7 @@ fn backup(ctx: &Ctx, dry: bool) -> Result<bool> {
         "backing up: {}",
         paths.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(" ")
     ));
-    let mut cmd = restic::niced(cfg);
+    let mut cmd = restic::command(cfg);
     cmd.arg("backup")
         .args(restic::backup_args(cfg, dry))
         .arg("--")
@@ -187,7 +187,7 @@ fn forget(ctx: &Ctx, dry: bool) -> Result<()> {
         return Ok(());
     };
     log::info("applying retention policy");
-    let status = run_restic(restic::niced(cfg).arg("forget").args(args))?;
+    let status = run_restic(restic::command(cfg).arg("forget").args(args))?;
     if status.success() {
         Ok(())
     } else {
@@ -201,7 +201,7 @@ fn check(ctx: &Ctx) -> Result<()> {
         return Ok(());
     }
     log::info("checking repository");
-    let status = run_restic(restic::niced(cfg).arg("check").args(restic::check_args(cfg)))?;
+    let status = run_restic(restic::command(cfg).arg("check").args(restic::check_args(cfg)))?;
     if status.success() {
         Ok(())
     } else {
