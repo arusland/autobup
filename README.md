@@ -160,7 +160,7 @@ Used in the log and lock file names and in the `project:<name>` snapshot tag.
 
 | Key               | Default | Description                                         |
 |-------------------|---------|-----------------------------------------------------|
-| `paths`           | `[]`    | Paths to back up. Missing paths are skipped with a warning. |
+| `paths`           | config dir | Paths to back up. Missing paths are skipped with a warning. If unset or empty, the directory containing the config file is backed up. |
 | `excludes`        | `[]`    | Exclude patterns                                    |
 | `exclude_file`    |         | File with exclude patterns                          |
 | `exclude_caches`  | `true`  | Skip directories that contain `CACHEDIR.TAG`        |

@@ -18,6 +18,7 @@ password_file = "~/.config/autobup/__NAME__.pass" # create with `autobup -c ... 
 
 [backup]
 # Paths to back up. Missing paths are skipped with a warning.
+# If unset or empty, the directory containing this file is backed up.
 paths = [__PATH_VALUE__]
 excludes = []                                    # e.g. ["*.tmp", "node_modules"]
 # exclude_file = "~/.config/autobup/__NAME__.exclude"

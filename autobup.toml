@@ -18,7 +18,7 @@ password_file = "~/.config/autobup/autobup.pass" # create with `autobup -c ... p
 
 [backup]
 # Paths to back up. Missing paths are skipped with a warning.
-paths = ["/media/ruslan/data/projects/autobup"]
+paths = []
 excludes = []                                    # e.g. ["*.tmp", "node_modules"]
 # exclude_file = "~/.config/autobup/autobup.exclude"
 exclude_caches = true                            # skip dirs containing CACHEDIR.TAG

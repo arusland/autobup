@@ -163,7 +163,12 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| AppError::config(format!("cannot read config {}: {e}", path.display())))?;
-        Self::parse(&text).map_err(|e| AppError::config(format!("invalid config {}: {e}", path.display())))
+        let mut cfg =
+            Self::parse(&text).map_err(|e| AppError::config(format!("invalid config {}: {e}", path.display())))?;
+        if cfg.backup.paths.is_empty() {
+            cfg.backup.paths.push(config_dir(path)?);
+        }
+        Ok(cfg)
     }
 
     pub fn parse(text: &str) -> std::result::Result<Self, String> {
@@ -257,6 +262,16 @@ impl Config {
                     .any(|s| k.contains(s))
             })
     }
+}
+
+/// Absolute directory that holds the config file, the default for `backup.paths`.
+fn config_dir(path: &Path) -> Result<String> {
+    let abs = std::path::absolute(path)
+        .map_err(|e| AppError::config(format!("cannot resolve config path {}: {e}", path.display())))?;
+    let dir = abs.parent().unwrap_or(Path::new("/"));
+    dir.to_str()
+        .map(str::to_string)
+        .ok_or_else(|| AppError::config(format!("config directory is not valid UTF-8: {}", dir.display())))
 }
 
 /// Expand a leading `~` (`~` or `~/...`) and `$HOME` / `${HOME}` anywhere in `s`.
@@ -496,6 +511,20 @@ pre_backup = "echo ~"
         )
         .unwrap();
         assert_eq!(cfg.telegram.bot_token_file.as_deref(), Some("/home/u/tg.token"));
+    }
+
+    #[test]
+    fn paths_default_to_config_dir() {
+        let dir = std::env::temp_dir().join(format!("autobup-cfgdir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("autobup.toml");
+        std::fs::write(&file, "project_name = \"app\"").unwrap();
+        let cfg = Config::load(&file).unwrap();
+        assert_eq!(cfg.backup.paths, [dir.to_str().unwrap()]);
+
+        std::fs::write(&file, "project_name = \"app\"\n[backup]\npaths = [\"/srv\"]").unwrap();
+        assert_eq!(Config::load(&file).unwrap().backup.paths, ["/srv"]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
