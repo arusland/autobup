@@ -120,7 +120,7 @@ mod tests {
         let cfg = Config::parse(&text).unwrap();
         assert_eq!(cfg.project_name, "my \"app\"");
         assert_eq!(cfg.backup.paths, ["/srv/my \"app\""]);
-        assert!(cfg.repository.password_file.unwrap().ends_with("/my \"app\".pass"));
+        assert!(cfg.vars_used.contains("PASSWORD"));
         assert_eq!(cfg.retention.keep_daily, Some(7));
         assert!(!text.contains("__"), "unreplaced placeholder");
     }

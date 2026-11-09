@@ -1,6 +1,6 @@
 //! Per-application TOML configuration.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::{AppError, Result};
-use crate::{log, proc, restic};
+use crate::{log, proc, restic, secrets};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,6 +32,21 @@ pub struct Config {
     /// Extra environment for restic and the hooks (AWS_*, B2_*, RESTIC_CACHE_DIR, ...).
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// `~/.config/autobup/<project_name>.env` (None without HOME).
+    #[serde(skip)]
+    pub secrets_file: Option<PathBuf>,
+    /// Variables from the secrets file, also passed to restic and the hooks.
+    #[serde(skip)]
+    pub secrets: BTreeMap<String, String>,
+    /// `${NAME}` references found in the config.
+    #[serde(skip)]
+    pub vars_used: BTreeSet<String>,
+    /// References defined neither in the secrets file nor in the environment.
+    #[serde(skip)]
+    pub vars_missing: BTreeSet<String>,
+    /// Secrets written literally into the config (not as `${NAME}`).
+    #[serde(skip)]
+    inline_secrets: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -176,15 +191,41 @@ impl Config {
     }
 
     fn parse_with_home(text: &str, home: Option<&str>) -> std::result::Result<Self, String> {
-        let mut cfg: Config = toml::from_str(text).map_err(|e| e.to_string())?;
-        cfg.expand_paths(home)?;
-        let name = cfg.project_name.trim();
+        let mut table: toml::Table = toml::from_str(text).map_err(|e| e.to_string())?;
+        let raw: Config = table
+            .clone()
+            .try_into()
+            .map_err(|e: toml::de::Error| e.to_string())?;
+        let name = raw.project_name.trim();
         if name.is_empty() || name.contains('/') || name.starts_with('.') {
             return Err(format!(
                 "project_name {:?} must be a non-empty file name",
-                cfg.project_name
+                raw.project_name
             ));
         }
+        let secrets_file = secrets::path(home, name);
+        let secrets = match &secrets_file {
+            Some(f) => secrets::load(f)?,
+            None => BTreeMap::new(),
+        };
+
+        // `${NAME}` everywhere except in project_name and the hooks, which
+        // are shell code and get the variables in their environment.
+        let lookup = |k: &str| secrets.get(k).cloned().or_else(|| std::env::var(k).ok());
+        let (mut used, mut missing) = (BTreeSet::new(), BTreeSet::new());
+        for (key, value) in table.iter_mut() {
+            if key != "project_name" && key != "hooks" {
+                substitute_value(value, &lookup, &mut used, &mut missing);
+            }
+        }
+
+        let mut cfg: Config = table.try_into().map_err(|e: toml::de::Error| e.to_string())?;
+        cfg.inline_secrets = raw.has_inline_secrets();
+        cfg.secrets_file = secrets_file;
+        cfg.secrets = secrets;
+        cfg.vars_used = used;
+        cfg.vars_missing = missing;
+        cfg.expand_paths(home)?;
         if non_empty(&cfg.telegram.bot_token).is_some() && non_empty(&cfg.telegram.bot_token_file).is_some() {
             return Err("set only one of telegram.bot_token and telegram.bot_token_file".into());
         }
@@ -252,15 +293,37 @@ impl Config {
         }
     }
 
-    fn has_secrets(&self) -> bool {
-        non_empty(&self.repository.password).is_some()
-            || non_empty(&self.telegram.bot_token).is_some()
-            || self.env.keys().any(|k| {
+    /// Secret values written into the config itself rather than taken from
+    /// the secrets file with `${NAME}`.
+    fn has_inline_secrets(&self) -> bool {
+        let literal = |v: &str| !v.trim().is_empty() && !secrets::has_reference(v);
+        self.repository.password.as_deref().is_some_and(literal)
+            || self.telegram.bot_token.as_deref().is_some_and(literal)
+            || self.env.iter().any(|(k, v)| {
                 let k = k.to_ascii_uppercase();
-                ["SECRET", "PASSWORD", "TOKEN", "KEY"]
-                    .iter()
-                    .any(|s| k.contains(s))
+                literal(v)
+                    && ["SECRET", "PASSWORD", "TOKEN", "KEY"]
+                        .iter()
+                        .any(|s| k.contains(s))
             })
+    }
+}
+
+fn substitute_value(
+    v: &mut toml::Value,
+    lookup: &dyn Fn(&str) -> Option<String>,
+    used: &mut BTreeSet<String>,
+    missing: &mut BTreeSet<String>,
+) {
+    match v {
+        toml::Value::String(s) => *s = secrets::substitute(s, lookup, used, missing),
+        toml::Value::Array(items) => items
+            .iter_mut()
+            .for_each(|i| substitute_value(i, lookup, used, missing)),
+        toml::Value::Table(t) => t
+            .iter_mut()
+            .for_each(|(_, i)| substitute_value(i, lookup, used, missing)),
+        _ => {}
     }
 }
 
@@ -330,6 +393,38 @@ pub fn validate(cfg: &Config, config_path: &Path) -> Result<()> {
     if !proc::in_path(restic::RESTIC) {
         return Err(AppError::config("restic not found in PATH, please install it"));
     }
+    let secrets_file = cfg
+        .secrets_file
+        .as_ref()
+        .map_or_else(|| "the secrets file".to_string(), |f| f.display().to_string());
+    if !cfg.vars_missing.is_empty() {
+        let names = cfg
+            .vars_missing
+            .iter()
+            .map(|n| format!("${{{n}}}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let hint = if cfg.vars_missing.contains("PASSWORD") {
+            format!(
+                " (run 'autobup -c {} pwd' to generate PASSWORD)",
+                config_path.display()
+            )
+        } else {
+            String::new()
+        };
+        return Err(AppError::config(format!(
+            "config uses {names}, not defined in {secrets_file} or the environment{hint}"
+        )));
+    }
+    if let Some(file) = &cfg.secrets_file
+        && let Ok(meta) = std::fs::metadata(file)
+        && meta.permissions().mode() & 0o044 != 0
+    {
+        log::warn(format!(
+            "secrets file is readable by others: chmod 600 {}",
+            file.display()
+        ));
+    }
     let env = |key| restic::effective_env(cfg, key);
     if env("RESTIC_REPOSITORY").is_none() && env("RESTIC_REPOSITORY_FILE").is_none() {
         return Err(AppError::config(
@@ -371,7 +466,7 @@ pub fn validate(cfg: &Config, config_path: &Path) -> Result<()> {
             Ok(_) => {}
         }
     }
-    if cfg.has_secrets()
+    if cfg.inline_secrets
         && let Ok(meta) = std::fs::metadata(config_path)
         && meta.permissions().mode() & 0o044 != 0
     {
@@ -525,6 +620,42 @@ pre_backup = "echo ~"
         std::fs::write(&file, "project_name = \"app\"\n[backup]\npaths = [\"/srv\"]").unwrap();
         assert_eq!(Config::load(&file).unwrap().backup.paths, ["/srv"]);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn secrets_file_vars_are_substituted() {
+        let home = std::env::temp_dir().join(format!("autobup-secrets-{}", std::process::id()));
+        let dir = home.join(".config/autobup");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("app.env"), "PASSWORD=p\\w\"d\nAWS_SECRET_ACCESS_KEY=k\n").unwrap();
+        let text = r#"
+project_name = "app"
+[repository]
+password = "${PASSWORD}"
+[env]
+AWS_SECRET_ACCESS_KEY = "${AWS_SECRET_ACCESS_KEY}"
+[hooks]
+pre_backup = "echo ${PASSWORD}"
+"#;
+        let cfg = Config::parse_with_home(text, home.to_str()).unwrap();
+        assert_eq!(cfg.repository.password.as_deref(), Some(r#"p\w"d"#));
+        assert_eq!(cfg.env["AWS_SECRET_ACCESS_KEY"], "k");
+        assert_eq!(cfg.hooks.pre_backup.as_deref(), Some("echo ${PASSWORD}"));
+        assert!(cfg.vars_missing.is_empty());
+        assert!(cfg.vars_used.contains("PASSWORD"));
+        assert!(!cfg.inline_secrets);
+        assert!(restic::env_pairs(&cfg).contains(&("PASSWORD".into(), r#"p\w"d"#.into())));
+
+        std::fs::remove_dir_all(&home).unwrap();
+        let cfg = Config::parse_with_home(text, home.to_str()).unwrap();
+        assert_eq!(cfg.repository.password.as_deref(), Some(""));
+        assert!(cfg.vars_missing.contains("PASSWORD"));
+    }
+
+    #[test]
+    fn inline_secrets_are_detected() {
+        let cfg = Config::parse("project_name = \"app\"\n[repository]\npassword = \"x\"").unwrap();
+        assert!(cfg.inline_secrets);
     }
 
     #[test]

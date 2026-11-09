@@ -10,6 +10,7 @@ mod lock;
 mod log;
 mod proc;
 mod restic;
+mod secrets;
 mod space;
 mod telegram;
 
@@ -57,7 +58,8 @@ enum Cmd {
     DryRun,
     /// Initialise the repository
     Init,
-    /// Generate the repository password file; fails if it already exists
+    /// Add a generated PASSWORD to ~/.config/autobup/<project>.env; fails if
+    /// it is already set
     Pwd,
     /// Send a test message to the configured Telegram chat
     NotifyTest,

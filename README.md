@@ -41,7 +41,8 @@ cargo install --path .        # installs autobup to ~/.cargo/bin
 autobup config /srv/myapp              # writes /srv/myapp/autobup.toml
 $EDITOR /srv/myapp/autobup.toml        # repository, backup.paths, hooks, ...
 
-# 2. Generate the repository password file (repository.password_file)
+# 2. Generate the repository password: adds PASSWORD=... to
+#    ~/.config/autobup/myapp.env (used as password = "${PASSWORD}")
 autobup -c /srv/myapp/autobup.toml pwd
 
 # 3. Create the repository
@@ -52,7 +53,7 @@ autobup -c /srv/myapp/autobup.toml dry-run
 autobup -c /srv/myapp/autobup.toml
 ```
 
-> **Keep a copy of the password file somewhere else.** If you lose it, you
+> **Keep a copy of the secrets file somewhere else.** If you lose it, you
 > cannot restore the backups.
 
 autobup can only back up files the user running it can read. Unreadable files
@@ -76,7 +77,7 @@ variable; a `DIR` or `-c` on the command line takes precedence over it.
 | `dry-run`        | Show what would be backed up or forgotten; changes nothing       |
 | `init`           | Initialise the repository                                        |
 | `config [DIR]`   | Create a config for project DIR (default `.`); see below         |
-| `pwd`            | Generate the password file (mode 600); fails if it exists        |
+| `pwd`            | Add a generated `PASSWORD` to the secrets file (mode 600); fails if it is already set |
 | `notify-test`    | Send a test message to the configured Telegram chat              |
 | `view [N]`       | Show the last N snapshots of this app (default 10)               |
 | `space`          | Show free space and repo size (local and `sftp:` repositories)   |
@@ -142,6 +143,35 @@ url = "~/backup/restic"
 password_file = "~/.config/autobup/myapp.pass"
 ```
 
+### Secrets file
+
+Secrets can live outside the config in `~/.config/autobup/<project_name>.env`,
+one `NAME=value` per line (`#` comments, an optional `export ` prefix and
+surrounding quotes are allowed). Use them in any config value as `${NAME}`;
+names not in the file are taken from autobup's environment, and an undefined
+name is an error. `[hooks]` are not substituted, but restic and the hooks get
+all variables of the file in their environment. `${HOME}` keeps its path meaning
+(see above). autobup warns if the file is readable by other users.
+
+```bash
+# ~/.config/autobup/myapp.env
+PASSWORD=...                     # written by `autobup -c ... pwd`
+TELEGRAM_BOT_TOKEN=123456789:AAE...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+```toml
+[repository]
+password = "${PASSWORD}"
+[telegram]
+bot_token = "${TELEGRAM_BOT_TOKEN}"
+[env]
+AWS_SECRET_ACCESS_KEY = "${AWS_SECRET_ACCESS_KEY}"
+```
+
+`pwd` creates the file (with a commented `TELEGRAM_BOT_TOKEN` line) if needed
+and appends `PASSWORD=...`; it never changes an existing `PASSWORD`.
+
 ### `project_name`
 
 Used in the log and lock file names and in the `project:<name>` snapshot tag.
@@ -153,7 +183,7 @@ Used in the log and lock file names and in the `project:<name>` snapshot tag.
 | `url`              | Any restic repository URL (`RESTIC_REPOSITORY`)     |
 | `url_file`         | File containing the URL (`RESTIC_REPOSITORY_FILE`)  |
 | `password_file`    | Repository password file, mode 600 (`RESTIC_PASSWORD_FILE`) |
-| `password`         | Password in the config (`RESTIC_PASSWORD`)          |
+| `password`         | Password (`RESTIC_PASSWORD`), usually `"${PASSWORD}"` from the secrets file |
 | `password_command` | Command printing the password (`RESTIC_PASSWORD_COMMAND`) |
 
 ### `[backup]`
@@ -263,12 +293,13 @@ post_backup = "rm -f /var/backups/myapp-db/*.sql.gz"
 ## Security notes
 
 - autobup runs with `umask 077`.
-- If you keep secrets (`repository.password`, `telegram.bot_token`, keys in
-  `[env]`) in the config, make it `chmod 600`. autobup warns you if it is
+- Prefer the secrets file (`~/.config/autobup/<project>.env`, mode 600) over
+  secrets in the config. If you write secrets (`repository.password`,
+  `telegram.bot_token`, keys in `[env]`) into the config itself, make it `chmod 600`. autobup warns you if it is
   readable by other users.
 - The Telegram token is used in-process and never passed on a command line.
   With `bot_token_file`, autobup warns if the file is readable by other users.
-- `pwd` never overwrites an existing file.
+- `pwd` only appends to the secrets file and never replaces an existing `PASSWORD`.
 
 ## Requirements
 

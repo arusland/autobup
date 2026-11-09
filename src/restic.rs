@@ -24,20 +24,22 @@ fn global_args() -> &'static [&'static str] {
     }
 }
 
-/// Environment passed to restic and the hooks: repository settings first,
-/// then the `[env]` table (which may override them).
+/// Environment passed to restic and the hooks: the secrets file first, then
+/// the repository settings, then the `[env]` table (later ones win).
 pub fn env_pairs(cfg: &Config) -> Vec<(String, String)> {
     let r = &cfg.repository;
-    let mut env: Vec<(String, String)> = [
-        ("RESTIC_REPOSITORY", &r.url),
-        ("RESTIC_REPOSITORY_FILE", &r.url_file),
-        ("RESTIC_PASSWORD_FILE", &r.password_file),
-        ("RESTIC_PASSWORD", &r.password),
-        ("RESTIC_PASSWORD_COMMAND", &r.password_command),
-    ]
-    .into_iter()
-    .filter_map(|(k, v)| non_empty(v).map(|v| (k.to_string(), v.to_string())))
-    .collect();
+    let mut env: Vec<(String, String)> = cfg.secrets.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    env.extend(
+        [
+            ("RESTIC_REPOSITORY", &r.url),
+            ("RESTIC_REPOSITORY_FILE", &r.url_file),
+            ("RESTIC_PASSWORD_FILE", &r.password_file),
+            ("RESTIC_PASSWORD", &r.password),
+            ("RESTIC_PASSWORD_COMMAND", &r.password_command),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| non_empty(v).map(|v| (k.to_string(), v.to_string()))),
+    );
     env.extend(cfg.env.iter().map(|(k, v)| (k.clone(), v.clone())));
     env
 }
