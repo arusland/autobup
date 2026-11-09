@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::config::Config;
 
 pub mod config;
+pub mod diff;
 pub mod dry_run;
 pub mod init;
 pub mod notify_test;

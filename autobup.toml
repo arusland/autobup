@@ -1,0 +1,77 @@
+# autobup config for autobup, created by `autobup config`.
+# Usage: autobup -c /media/ruslan/data/projects/autobup/autobup.toml [command]
+# Keep this file chmod 600 if it contains secrets.
+
+# Used for the log file name, lock file name and "project:<name>" snapshot tag.
+project_name = "autobup"
+
+# Set url or url_file, and one of password_file / password / password_command.
+# Any restic backend works: local, SFTP, S3, B2, rest-server...
+[repository]
+url = "~/Downloads/restic"
+# url = "sftp:backup@backup.example.com:/srv/restic/autobup"
+# url = "s3:https://s3.eu-central-1.amazonaws.com/my-bucket/autobup"
+# url_file = "~/.config/autobup/autobup.repo"   # file containing the URL
+password_file = "~/.config/autobup/autobup.pass" # create with `autobup -c ... pwd`
+# password = "..."                               # password in this file
+# password_command = "pass show restic/autobup"  # command printing the password
+
+[backup]
+# Paths to back up. Missing paths are skipped with a warning.
+paths = ["/media/ruslan/data/projects/autobup"]
+excludes = []                                    # e.g. ["*.tmp", "node_modules"]
+# exclude_file = "~/.config/autobup/autobup.exclude"
+exclude_caches = true                            # skip dirs containing CACHEDIR.TAG
+one_file_system = false                          # true = do not cross file systems
+tags = []                                        # extra tags, e.g. ["daily"]
+# host = "myhost"                                # override hostname stored in snapshots
+extra_args = []                                  # e.g. ["--compression", "max"]
+
+# Leave a keep_* setting out to not use it. Without any, forget is skipped.
+# Retention only touches snapshots tagged "project:<project_name>", so several
+# projects can share one repository.
+[retention]
+# keep_last = 10
+# keep_hourly = 24
+keep_daily = 7
+keep_weekly = 4
+keep_monthly = 6
+# keep_yearly = 2
+# keep_within = "2d"
+prune = true                                     # remove unreferenced data when forgetting
+
+# Run `restic check` after each backup.
+[check]
+enabled = false
+# read_data_subset = "5%"                        # also read part of the pack data
+
+[runtime]
+# healthcheck_url = "https://hc-ping.com/<uuid>" # pinged on start/success/fail
+
+# Both bot_token and chat_id empty/missing = disabled.
+# Create a bot with @BotFather to get the token. Chat id: send the bot a
+# message, then open https://api.telegram.org/bot<TOKEN>/getUpdates.
+# Test with `autobup -c ... notify-test`.
+[telegram]
+bot_token_file = "~/.config/autobup/telegram.token" # instead of bot_token, mode 600
+chat_id = "191666288"                          # or "-1001234567890" for a group
+notify_success = false                            # false = only failures and warnings
+
+# Shell snippets, run with `bash -eo pipefail -c`: any failing command fails the hook.
+# They get the restic environment plus AUTOBUP_PROJECT and AUTOBUP_HOOK.
+#   pre_backup  - failure aborts the run (no backup is made).
+#   post_backup - always runs once pre_backup started; $1 = exit status so far.
+#   on_failure  - runs when the run fails; $1 = exit code.
+[hooks]
+# pre_backup = """
+# mkdir -p /var/backups/autobup-db
+# pg_dump -U autobup autobup | gzip > /var/backups/autobup-db/autobup.sql.gz
+# """
+# post_backup = "rm -f /var/backups/autobup-db/*.sql.gz"
+# on_failure = 'echo "backup of autobup failed with code $1" | mail -s "backup failed" admin@example.com'
+
+# Extra environment for restic and the hooks.
+[env]
+# AWS_ACCESS_KEY_ID = "..."
+# AWS_SECRET_ACCESS_KEY = "..."
+# RESTIC_CACHE_DIR = "/var/cache/restic"

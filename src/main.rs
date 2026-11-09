@@ -77,6 +77,12 @@ enum Cmd {
         #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
     },
+    /// `restic diff` with this app's settings; without ARGS compares the two
+    /// latest snapshots of this app
+    Diff {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
+        args: Vec<String>,
+    },
     /// Run any restic command with this app's settings, e.g. `restic snapshots`
     Restic {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, value_name = "ARGS")]
@@ -120,7 +126,11 @@ fn real_main(cli: Cli) -> Result<()> {
     }
     // Command line wins over AUTOBUP_CONFIG (read here, not via clap, so that
     // the env var does not conflict with DIR).
-    let from_env = || std::env::var_os("AUTOBUP_CONFIG").filter(|v| !v.is_empty()).map(PathBuf::from);
+    let from_env = || {
+        std::env::var_os("AUTOBUP_CONFIG")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
     let config_path = cli.dir.or(cli.config).or_else(from_env).ok_or_else(|| {
         AppError::config("no config file given: pass a project DIR, use -c FILE or set AUTOBUP_CONFIG")
     })?;
@@ -137,6 +147,7 @@ fn real_main(cli: Cli) -> Result<()> {
         Cmd::NotifyTest => commands::notify_test::execute(&ctx),
         Cmd::View { count } => commands::view::execute(&ctx, count),
         Cmd::Space => commands::space::execute(&ctx),
+        Cmd::Diff { args } => commands::diff::execute(&ctx, &args),
         Cmd::Restic { args } => commands::restic::execute(&ctx, &args),
         Cmd::Config { .. } => unreachable!("handled above"),
     }

@@ -80,6 +80,7 @@ variable; a `DIR` or `-c` on the command line takes precedence over it.
 | `notify-test`    | Send a test message to the configured Telegram chat              |
 | `view [N]`       | Show the last N snapshots of this app (default 10)               |
 | `space`          | Show free space and repo size (local and `sftp:` repositories)   |
+| `diff [args]`    | `restic diff`; without args compares the two latest snapshots    |
 | `restic <args>`  | Run any restic command with this app's settings                  |
 | `help`           | Show usage                                                       |
 
@@ -93,6 +94,8 @@ Examples:
 ```bash
 autobup config ~/projects/shop               # ~/projects/shop/autobup.toml
 autobup config ~/projects/shop -o ~/.config/autobup/shop.toml
+autobup -c /srv/myapp/autobup.toml diff      # changes in the last backup
+autobup -c /srv/myapp/autobup.toml diff 1a2b3c4d 5e6f7a8b
 autobup -c /srv/myapp/autobup.toml restic snapshots
 autobup -c /srv/myapp/autobup.toml restic restore latest --target /tmp/restore
 autobup -c /srv/myapp/autobup.toml restic mount /mnt/restore
