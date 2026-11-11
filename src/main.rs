@@ -42,7 +42,7 @@ struct Cli {
     #[arg(value_name = "DIR", conflicts_with = "config")]
     dir: Option<PathBuf>,
 
-    /// Pass --verbose to restic
+    /// Verbose output: pass --verbose to restic and log the steps of `space`
     #[arg(short, long, global = true)]
     verbose: bool,
 
@@ -94,7 +94,7 @@ enum Cmd {
 
 fn main() {
     let cli = Cli::parse();
-    restic::set_verbose(cli.verbose);
+    log::set_verbose(cli.verbose);
     setup_process();
     let code = match real_main(cli) {
         Ok(()) => 0,

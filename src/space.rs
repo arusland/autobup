@@ -8,7 +8,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 
@@ -32,6 +32,7 @@ pub fn repository(cfg: &Config) -> Option<String> {
         return Some(r);
     }
     let file = restic::effective_env(cfg, "RESTIC_REPOSITORY_FILE")?;
+    log::step(format!("reading repository location from {file}"));
     match std::fs::read_to_string(&file) {
         Ok(s) => s
             .lines()
@@ -48,13 +49,21 @@ pub fn repository(cfg: &Config) -> Option<String> {
 pub fn target_free_space(cfg: &Config) -> Result<String, SpaceError> {
     let repo = repository(cfg).ok_or(SpaceError::Failed)?;
     if repo.starts_with("sftp:") {
+        log::step("repository backend: sftp");
         return sftp_free_space(&repo);
     }
     const REMOTE: [&str; 7] = ["s3:", "b2:", "rest:", "rclone:", "swift:", "azure:", "gs:"];
-    if REMOTE.iter().any(|p| repo.starts_with(p)) {
+    if let Some(p) = REMOTE.iter().find(|p| repo.starts_with(*p)) {
+        // The URL is not logged: rest: and others may hold credentials.
+        log::step(format!(
+            "repository backend: {}, no free space available",
+            p.trim_end_matches(':')
+        ));
         return Err(SpaceError::Unsupported);
     }
-    local_free_space(repo.strip_prefix("local:").unwrap_or(&repo))
+    let path = repo.strip_prefix("local:").unwrap_or(&repo);
+    log::step(format!("repository backend: local, path {path}"));
+    local_free_space(path)
 }
 
 fn fail<T>(msg: String) -> Result<T, SpaceError> {
@@ -105,6 +114,7 @@ fn percent_used(used: u64, avail: u64) -> String {
 /// unmounted backup disk would otherwise be reported with the free space of
 /// the disk below the mount point.
 fn local_free_space(path: &str) -> Result<String, SpaceError> {
+    log::step(format!("reading file system stats of {path}"));
     let p = path.to_string();
     let stat = match proc::with_timeout(DF_TIMEOUT, move || nix::sys::statvfs::statvfs(p.as_str())) {
         None => return fail(format!("cannot read free space of {path}: timed out")),
@@ -115,7 +125,10 @@ fn local_free_space(path: &str) -> Result<String, SpaceError> {
     let size = stat.blocks() as u64 * frsize;
     let avail = stat.blocks_available() as u64 * frsize;
     let used = (stat.blocks() as u64).saturating_sub(stat.blocks_free() as u64) * frsize;
+    log::step(format!("file system: {} free of {}", human(avail), human(size)));
+    log::step("looking up device and mount point in /proc/self/mountinfo");
     let (dev, mount) = find_mount(Path::new(path)).unwrap_or_else(|| ("?".into(), "?".into()));
+    log::step(format!("mounted: {dev} on {mount}"));
     let repo_size = local_repo_size(path)
         .map(|s| format!("repository size {s}, "))
         .unwrap_or_default();
@@ -130,17 +143,27 @@ fn local_free_space(path: &str) -> Result<String, SpaceError> {
 /// Disk usage of a folder, like `du -s`. Unreadable entries are an error, since
 /// a partial total would look like a valid size.
 fn local_repo_size(path: &str) -> Option<String> {
+    log::step(format!("measuring repository size of {path}"));
+    let start = Instant::now();
     let p = path.to_string();
-    let result = proc::with_timeout(SIZE_TIMEOUT, move || -> Result<u64, String> {
-        let mut total = 0u64;
+    let result = proc::with_timeout(SIZE_TIMEOUT, move || -> Result<(u64, u64), String> {
+        let (mut total, mut files) = (0u64, 0u64);
         for entry in walkdir::WalkDir::new(&p) {
             let meta = entry.and_then(|e| e.metadata()).map_err(|e| e.to_string())?;
             total += meta.blocks() * 512;
+            files += u64::from(meta.is_file());
         }
-        Ok(total)
+        Ok((total, files))
     });
     match result {
-        Some(Ok(bytes)) => Some(human(bytes)),
+        Some(Ok((bytes, files))) => {
+            log::step(format!(
+                "repository size: {} in {files} files ({:.1}s)",
+                human(bytes),
+                start.elapsed().as_secs_f64()
+            ));
+            Some(human(bytes))
+        }
         Some(Err(e)) => {
             log::warn(format!("cannot read repository size of {path}: {e}"));
             None
@@ -270,7 +293,10 @@ fn sftp_free_space(repo: &str) -> Result<String, SpaceError> {
         t.path
     );
     let input = format!("df -h \"{}\"\n", quote(&t.path));
-    let out = match proc::run_capture(&mut sftp_command(&t), Some(input), DF_TIMEOUT) {
+    log::step(format!("reading free space of {location} with sftp df"));
+    let mut cmd = sftp_command(&t);
+    restic::show(&cmd);
+    let out = match proc::run_capture(&mut cmd, Some(input), DF_TIMEOUT) {
         Err(e) => return fail(format!("cannot read free space of {}:{}: {e}", t.host, t.path)),
         Ok(o) if !o.success => {
             return fail(format!(
@@ -285,6 +311,7 @@ fn sftp_free_space(repo: &str) -> Result<String, SpaceError> {
     let Some((size, avail, cap)) = parse_sftp_df(&out.stdout) else {
         return fail(format!("unexpected sftp df output: {}", out.last_line()));
     };
+    log::step(format!("file system: {avail} free of {size}"));
     let repo_size = sftp_repo_size(&t)
         .map(|s| format!("repository size {s}, "))
         .unwrap_or_default();
@@ -316,7 +343,13 @@ fn sftp_repo_size(t: &SftpTarget) -> Option<String> {
         input.push_str(&format!("-ls -ln \"{path}/data/{i:02x}\"\n"));
     }
     let where_ = format!("{}:{}", t.host, t.path);
-    let out = match proc::run_capture(&mut sftp_command(t), Some(input), SIZE_TIMEOUT) {
+    log::step(format!(
+        "measuring repository size of {where_} (listing 261 folders with sftp)"
+    ));
+    let start = Instant::now();
+    let mut cmd = sftp_command(t);
+    restic::show(&cmd);
+    let out = match proc::run_capture(&mut cmd, Some(input), SIZE_TIMEOUT) {
         Err(e) => {
             log::warn(format!("cannot read repository size of {where_}: {e}"));
             return None;
@@ -335,7 +368,14 @@ fn sftp_repo_size(t: &SftpTarget) -> Option<String> {
             log::warn(format!("no repository files found at {where_}"));
             None
         }
-        total => Some(human(total)),
+        total => {
+            log::step(format!(
+                "repository size: {} ({:.1}s)",
+                human(total),
+                start.elapsed().as_secs_f64()
+            ));
+            Some(human(total))
+        }
     }
 }
 

@@ -178,8 +178,8 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| AppError::config(format!("cannot read config {}: {e}", path.display())))?;
-        let mut cfg =
-            Self::parse(&text).map_err(|e| AppError::config(format!("invalid config {}: {e}", path.display())))?;
+        let mut cfg = Self::parse(&text)
+            .map_err(|e| AppError::config(format!("invalid config {}: {e}", path.display())))?;
         if cfg.backup.paths.is_empty() {
             cfg.backup.paths.push(config_dir(path)?);
         }

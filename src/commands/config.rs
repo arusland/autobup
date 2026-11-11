@@ -52,7 +52,10 @@ pub fn execute(dir: &Path, output: Option<&Path>) -> Result<()> {
         .and_then(|_| f.sync_all())
         .map_err(|e| AppError::fail(format!("cannot write config file {}: {e}", output.display())))?;
 
-    log::info(format!("config for project {name:?} written to {}", output.display()));
+    log::info(format!(
+        "config for project {name:?} written to {}",
+        output.display()
+    ));
     log::info(format!(
         "next: review it, then run 'autobup -c {0} pwd' and 'autobup -c {0} init'",
         output.display()

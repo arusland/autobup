@@ -3,10 +3,21 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 static PROJECT: OnceLock<String> = OnceLock::new();
 static LOG_FILE: Mutex<Option<File>> = Mutex::new(None);
+static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// Turn on verbose output (`-v`): restic gets `--verbose` and `step` lines are shown.
+pub fn set_verbose(on: bool) {
+    VERBOSE.store(on, Ordering::Relaxed);
+}
+
+pub fn verbose() -> bool {
+    VERBOSE.load(Ordering::Relaxed)
+}
 
 pub fn set_project(name: &str) {
     let _ = PROJECT.set(name.to_string());
@@ -53,6 +64,14 @@ pub fn command(argv: &str) {
     drop(err);
     if let Some(file) = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         let _ = file.write_all(plain.as_bytes());
+    }
+}
+
+/// A progress line shown only in verbose mode, on stderr so it does not mix
+/// with output meant for pipes.
+pub fn step(msg: impl AsRef<str>) {
+    if verbose() {
+        raw(line(msg.as_ref()).as_bytes(), true);
     }
 }
 

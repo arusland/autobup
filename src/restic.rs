@@ -1,27 +1,15 @@
 //! Building and running restic commands. restic is always run as `restic` from PATH.
 
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::{Config, non_empty};
 use crate::log;
 
 pub const RESTIC: &str = "restic";
 
-static VERBOSE: AtomicBool = AtomicBool::new(false);
-
-/// Pass `--verbose` to every restic command run from now on.
-pub fn set_verbose(on: bool) {
-    VERBOSE.store(on, Ordering::Relaxed);
-}
-
 /// Global restic flags chosen on our command line.
 fn global_args() -> &'static [&'static str] {
-    if VERBOSE.load(Ordering::Relaxed) {
-        &["--verbose"]
-    } else {
-        &[]
-    }
+    if log::verbose() { &["--verbose"] } else { &[] }
 }
 
 /// Environment passed to restic and the hooks: the secrets file first, then

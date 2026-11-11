@@ -254,7 +254,9 @@ target and the repository size. Local repositories are measured directly
 sftp `df` and `ls` commands, which need key-based authentication (as restic
 does) and work on SFTP-only accounts. If the size cannot be read, autobup logs
 a warning and shows only the free space. The `space` command prints the same
-value on demand. It needs neither restic nor the repository password.
+value on demand. It needs neither restic nor the repository password. With
+`-v` it also logs each step (backend, file system, mount point, sftp commands,
+repository size and how long the measurement took) on stderr.
 
 The value also says where the space is:
 
